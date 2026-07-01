@@ -1,26 +1,48 @@
 import { google, drive_v3 } from "googleapis";
 import { Readable } from "stream";
 import type { DriveFolder, DriveFile } from "./types";
+import { getSupabaseAdmin } from "./supabase";
 
-function getAuth() {
-  const credentials = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
-  if (!credentials) {
-    throw new Error("GOOGLE_SERVICE_ACCOUNT_JSON environment variable is not set");
+async function getAuth() {
+  // Try OAuth2 first (refresh token stored in database)
+  const db = getSupabaseAdmin();
+  const { data: settings } = await db
+    .from("app_settings")
+    .select("google_refresh_token")
+    .limit(1)
+    .single();
+
+  if (settings?.google_refresh_token) {
+    const oauth2Client = new google.auth.OAuth2(
+      process.env.GOOGLE_CLIENT_ID,
+      process.env.GOOGLE_CLIENT_SECRET
+    );
+    oauth2Client.setCredentials({ refresh_token: settings.google_refresh_token });
+    return oauth2Client;
   }
 
-  const parsed = JSON.parse(credentials);
-  return new google.auth.GoogleAuth({
-    credentials: parsed,
-    scopes: ["https://www.googleapis.com/auth/drive"],
-  });
+  // Fallback to service account if available
+  const credentials = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+  if (credentials) {
+    const parsed = JSON.parse(credentials);
+    return new google.auth.GoogleAuth({
+      credentials: parsed,
+      scopes: ["https://www.googleapis.com/auth/drive"],
+    });
+  }
+
+  throw new Error(
+    "Google Drive not connected. Go to Settings and click 'Connect Google Drive'."
+  );
 }
 
-function getDrive(): drive_v3.Drive {
-  return google.drive({ version: "v3", auth: getAuth() });
+async function getDrive(): Promise<drive_v3.Drive> {
+  const auth = await getAuth();
+  return google.drive({ version: "v3", auth });
 }
 
 export async function listSubfolders(parentFolderId: string): Promise<DriveFolder[]> {
-  const drive = getDrive();
+  const drive = await getDrive();
   const folders: DriveFolder[] = [];
   let pageToken: string | undefined;
 
@@ -49,7 +71,7 @@ export async function listSubfolders(parentFolderId: string): Promise<DriveFolde
 }
 
 export async function listImagesInFolder(folderId: string): Promise<DriveFile[]> {
-  const drive = getDrive();
+  const drive = await getDrive();
   const images: DriveFile[] = [];
   let pageToken: string | undefined;
 
@@ -79,7 +101,7 @@ export async function listImagesInFolder(folderId: string): Promise<DriveFile[]>
 }
 
 export async function downloadFile(fileId: string): Promise<Buffer> {
-  const drive = getDrive();
+  const drive = await getDrive();
   const res = await drive.files.get(
     { fileId, alt: "media" },
     { responseType: "arraybuffer" }
@@ -91,7 +113,7 @@ export async function createSubfolder(
   parentFolderId: string,
   folderName: string
 ): Promise<{ id: string; webViewLink: string }> {
-  const drive = getDrive();
+  const drive = await getDrive();
   const res = await drive.files.create({
     requestBody: {
       name: folderName,
@@ -115,7 +137,7 @@ export async function uploadImageToFolder(
   imageBuffer: Buffer,
   mimeType: string = "image/png"
 ): Promise<DriveFile> {
-  const drive = getDrive();
+  const drive = await getDrive();
   const stream = new Readable();
   stream.push(imageBuffer);
   stream.push(null);
@@ -141,7 +163,7 @@ export async function uploadImageToFolder(
 }
 
 export async function setFolderPublicReadable(folderId: string): Promise<void> {
-  const drive = getDrive();
+  const drive = await getDrive();
   await drive.permissions.create({
     fileId: folderId,
     requestBody: {

@@ -44,6 +44,9 @@ export interface AppSettings {
   generation_count: number;
   cron_enabled: boolean;
   cron_day: string;
+  google_refresh_token: string | null;
+  google_email: string | null;
+  google_connected_at: string | null;
   updated_at: string;
 }
 
