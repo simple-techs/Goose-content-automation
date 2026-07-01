@@ -52,6 +52,8 @@ export async function listSubfolders(parentFolderId: string): Promise<DriveFolde
       fields: "nextPageToken, files(id, name, mimeType, webViewLink)",
       pageSize: 100,
       pageToken,
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true,
     });
 
     if (res.data.files) {
@@ -81,6 +83,8 @@ export async function listImagesInFolder(folderId: string): Promise<DriveFile[]>
       fields: "nextPageToken, files(id, name, mimeType, webViewLink, thumbnailLink)",
       pageSize: 100,
       pageToken,
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true,
     });
 
     if (res.data.files) {
@@ -103,7 +107,7 @@ export async function listImagesInFolder(folderId: string): Promise<DriveFile[]>
 export async function downloadFile(fileId: string): Promise<Buffer> {
   const drive = await getDrive();
   const res = await drive.files.get(
-    { fileId, alt: "media" },
+    { fileId, alt: "media", supportsAllDrives: true },
     { responseType: "arraybuffer" }
   );
   return Buffer.from(res.data as ArrayBuffer);
@@ -121,6 +125,7 @@ export async function createSubfolder(
       parents: [parentFolderId],
     },
     fields: "id, webViewLink",
+    supportsAllDrives: true,
   });
 
   return {
@@ -152,6 +157,7 @@ export async function uploadImageToFolder(
       body: stream,
     },
     fields: "id, name, mimeType, webViewLink",
+    supportsAllDrives: true,
   });
 
   return {
@@ -170,5 +176,6 @@ export async function setFolderPublicReadable(folderId: string): Promise<void> {
       role: "reader",
       type: "anyone",
     },
+    supportsAllDrives: true,
   });
 }
