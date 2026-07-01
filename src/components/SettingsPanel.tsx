@@ -5,14 +5,22 @@ import type { AppSettings } from "@/lib/types";
 
 export default function SettingsPanel() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
+  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
 
   useEffect(() => {
     fetch("/api/settings")
-      .then((r) => r.json())
-      .then((d) => setSettings(d.settings))
-      .catch(() => setMessage("Failed to load settings"));
+      .then((r) => {
+        if (!r.ok) throw new Error("API returned " + r.status);
+        return r.json();
+      })
+      .then((d) => {
+        if (d.settings) setSettings(d.settings);
+        else setMessage("No settings found — configure and save below");
+      })
+      .catch(() => setMessage("Failed to load settings"))
+      .finally(() => setLoading(false));
   }, []);
 
   const handleSave = async () => {
@@ -44,6 +52,22 @@ export default function SettingsPanel() {
       setSaving(false);
     }
   };
+
+  if (loading) {
+    return <div className="text-sm text-gray-500">Loading settings...</div>;
+  }
+
+  if (!settings && message) {
+    return (
+      <div className="space-y-4 rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
+        <h2 className="text-lg font-semibold text-gray-900">Settings</h2>
+        <p className="text-sm text-red-600">{message}</p>
+        <p className="text-xs text-gray-500">
+          Make sure your Supabase environment variables are configured and the migration has been run.
+        </p>
+      </div>
+    );
+  }
 
   if (!settings) {
     return <div className="text-sm text-gray-500">Loading settings...</div>;
