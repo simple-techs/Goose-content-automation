@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
-import { listSubfolders, listImagesInFolder } from "@/lib/google-drive";
+import { listSubfolders, listAllImagesRecursive } from "@/lib/google-drive";
 
 export async function GET() {
   const { data, error } = await getSupabaseAdmin()
@@ -60,7 +60,7 @@ async function syncFromDrive(parentFolderId: string) {
         continue;
       }
 
-      const images = await listImagesInFolder(folder.id);
+      const images = await listAllImagesRecursive(folder.id);
 
       await getSupabaseAdmin().from("personas").insert({
         name: folder.name,

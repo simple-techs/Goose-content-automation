@@ -1,6 +1,7 @@
 import { getSupabaseAdmin } from "./supabase";
 import {
   listImagesInFolder,
+  listAllImagesRecursive,
   downloadFile,
   createSubfolder,
   uploadImageToFolder,
@@ -42,9 +43,9 @@ export async function onboardPersona(personaId: string): Promise<void> {
     .eq("id", personaId);
 
   try {
-    const images = await listImagesInFolder(persona.drive_folder_id);
+    const images = await listAllImagesRecursive(persona.drive_folder_id);
     if (images.length === 0) {
-      throw new Error("No images found in persona Drive folder");
+      throw new Error("No images found in persona Drive folder (checked subfolders too)");
     }
 
     const maxImages = Math.min(images.length, 10);

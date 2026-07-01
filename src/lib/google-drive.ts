@@ -168,6 +168,17 @@ export async function uploadImageToFolder(
   };
 }
 
+export async function listAllImagesRecursive(folderId: string): Promise<DriveFile[]> {
+  const directImages = await listImagesInFolder(folderId);
+  const subfolders = await listSubfolders(folderId);
+
+  const subfolderImages = await Promise.all(
+    subfolders.map((sf) => listImagesInFolder(sf.id))
+  );
+
+  return [...directImages, ...subfolderImages.flat()];
+}
+
 export async function setFolderPublicReadable(folderId: string): Promise<void> {
   const drive = await getDrive();
   await drive.permissions.create({
