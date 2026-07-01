@@ -31,18 +31,18 @@ export default function PersonaTable({ personas, onRefresh }: PersonaTableProps)
   };
 
   const handleOnboard = async () => {
-    const pendingSelected = personas
-      .filter((p) => selected.has(p.id) && p.status === "pending")
+    const onboardable = personas
+      .filter((p) => selected.has(p.id) && (p.status === "pending" || p.status === "error"))
       .map((p) => p.id);
 
-    if (pendingSelected.length === 0) return;
+    if (onboardable.length === 0) return;
 
     setLoading("onboarding");
     try {
       await fetch("/api/onboard", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ personaIds: pendingSelected }),
+        body: JSON.stringify({ personaIds: onboardable }),
       });
       onRefresh();
     } finally {
@@ -70,8 +70,8 @@ export default function PersonaTable({ personas, onRefresh }: PersonaTableProps)
     }
   };
 
-  const pendingCount = personas.filter(
-    (p) => selected.has(p.id) && p.status === "pending"
+  const onboardableCount = personas.filter(
+    (p) => selected.has(p.id) && (p.status === "pending" || p.status === "error")
   ).length;
   const activeCount = personas.filter(
     (p) => selected.has(p.id) && p.status === "active"
@@ -82,12 +82,12 @@ export default function PersonaTable({ personas, onRefresh }: PersonaTableProps)
       <div className="mb-4 flex items-center gap-3">
         <button
           onClick={handleOnboard}
-          disabled={pendingCount === 0 || loading !== null}
+          disabled={onboardableCount === 0 || loading !== null}
           className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {loading === "onboarding"
             ? "Creating Soul IDs..."
-            : `Onboard Selected (${pendingCount})`}
+            : `Onboard Selected (${onboardableCount})`}
         </button>
         <button
           onClick={handleGenerate}

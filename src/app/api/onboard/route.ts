@@ -13,7 +13,7 @@ export async function POST(req: NextRequest) {
     const { data, error } = await getSupabaseAdmin()
       .from("personas")
       .select("id")
-      .eq("status", "pending");
+      .in("status", ["pending", "error"]);
 
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });

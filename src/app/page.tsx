@@ -90,7 +90,7 @@ export default function Dashboard() {
     }
   };
 
-  const pendingCount = personas.filter((p) => p.status === "pending").length;
+  const pendingCount = personas.filter((p) => p.status === "pending" || p.status === "error").length;
   const activeCount = personas.filter((p) => p.status === "active").length;
 
   return (
@@ -150,7 +150,7 @@ export default function Dashboard() {
               >
                 {onboardingAll
                   ? "Onboarding..."
-                  : `Onboard All Pending (${pendingCount})`}
+                  : `Onboard All (${pendingCount})`}
               </button>
               <button
                 onClick={handleGenerateAll}
