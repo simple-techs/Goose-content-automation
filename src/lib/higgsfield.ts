@@ -127,7 +127,7 @@ export async function createSoulId(
     body: JSON.stringify({
       name,
       type: "soul_2",
-      images: mediaIds.map((mid) => ({ media_input_id: mid })),
+      images: mediaIds.map((mid) => ({ id: mid, type: "media_input" })),
     }),
   });
 
