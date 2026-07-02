@@ -114,6 +114,40 @@ export default function SettingsPanel() {
         )}
       </div>
 
+      <div className="border-b border-gray-200 pb-4">
+        <h3 className="text-sm font-medium text-gray-700">Higgsfield Connection</h3>
+        {settings.higgsfield_email ? (
+          <div className="mt-2 flex items-center gap-3">
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-green-100 px-3 py-1 text-xs font-medium text-green-700">
+              <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
+              Connected
+            </span>
+            <span className="text-sm text-gray-600">{settings.higgsfield_email}</span>
+            <button
+              onClick={() => window.location.href = "/api/auth/higgsfield"}
+              className="ml-auto text-xs text-blue-600 hover:underline"
+            >
+              Reconnect
+            </button>
+          </div>
+        ) : (
+          <div className="mt-2">
+            <button
+              onClick={() => window.location.href = "/api/auth/higgsfield"}
+              className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50"
+            >
+              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M13 10V3L4 14h7v7l9-11h-7z"/>
+              </svg>
+              Connect Higgsfield
+            </button>
+            <p className="mt-1 text-xs text-gray-500">
+              Sign in with your Higgsfield account to create Soul IDs and generate content
+            </p>
+          </div>
+        )}
+      </div>
+
       <div>
         <label className="block text-sm font-medium text-gray-700">
           Google Drive Parent Folder ID

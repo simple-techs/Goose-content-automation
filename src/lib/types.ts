@@ -47,6 +47,12 @@ export interface AppSettings {
   google_refresh_token: string | null;
   google_email: string | null;
   google_connected_at: string | null;
+  higgsfield_access_token: string | null;
+  higgsfield_refresh_token: string | null;
+  higgsfield_user_id: string | null;
+  higgsfield_workspace_id: string | null;
+  higgsfield_email: string | null;
+  higgsfield_connected_at: string | null;
   updated_at: string;
 }
 
