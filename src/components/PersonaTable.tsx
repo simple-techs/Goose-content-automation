@@ -57,6 +57,20 @@ export default function PersonaTable({ personas, onRefresh }: PersonaTableProps)
 
     if (activeSelected.length === 0) return;
 
+    // Check token freshness before generating
+    try {
+      const check = await fetch("/api/settings/higgsfield-token");
+      const status = await check.json();
+      if (!status.fresh) {
+        alert(
+          "Token not fresh. Click on your higgsfield.ai tab to refresh it, wait 2 seconds, then come back and click Generate again.\n\nIf you haven't set up the bridge yet, go to Settings and copy the bridge command."
+        );
+        return;
+      }
+    } catch {
+      // If check fails, proceed anyway and let the server handle errors
+    }
+
     setLoading("generating");
     try {
       const res = await fetch("/api/generate", {
