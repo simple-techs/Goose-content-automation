@@ -167,23 +167,47 @@ async function pollForCompletion(
   throw new Error(`Generation job ${jobId} timed out after ${maxAttempts} attempts`);
 }
 
-// Content batch structure: 3 selfies + 2 shirtless + 5 lifestyle = 10 images per batch
-// Type-specific prompt goes FIRST so it's the primary instruction, base quality prompt follows
-const CONTENT_BATCH_SPECS = [
+// Content batch: 9 images total — 1 MCP call per image (MCP returns 1 image per call)
+// Type-specific prompt goes FIRST, base quality prompt follows
+const CONTENT_BATCH_IMAGES: Array<{ type: string; prefix: string }> = [
+  // 3 selfies
   {
     type: "selfie",
-    count: 3,
-    prefix: "PHOTO TYPE: Close-up selfie taken with front-facing iPhone camera. The subject's arm is extended or slightly visible holding the phone. Frame from chest/shoulders up. Each image should have a slightly different facial expression and head angle — as if 3 selfies were taken in a row in the same moment. Casual, candid feel.",
+    prefix: "PHOTO TYPE: Close-up selfie taken with front-facing iPhone camera. The subject's arm is extended or slightly visible holding the phone. Frame from chest/shoulders up. Slightly tilted head, relaxed natural expression, looking directly at camera. Casual, candid feel — like a selfie taken casually at home or outside.",
+  },
+  {
+    type: "selfie",
+    prefix: "PHOTO TYPE: Close-up selfie taken with front-facing iPhone camera. The subject's arm is extended or slightly visible holding the phone. Frame from chest/shoulders up. Slight smile, head angled slightly to the left, relaxed vibe. Should look like the next photo in a quick selfie burst — same setting, subtly different expression.",
+  },
+  {
+    type: "selfie",
+    prefix: "PHOTO TYPE: Close-up selfie taken with front-facing iPhone camera. The subject's arm is extended or slightly visible holding the phone. Frame from chest/shoulders up. Neutral or smirking expression, head angled slightly to the right. Same setting as previous selfies — should feel like a third shot in the same burst.",
+  },
+  // 2 shirtless
+  {
+    type: "shirtless",
+    prefix: "PHOTO TYPE: Shirtless photo of the subject showing natural physique. No shirt on. Indoor casual setting — bedroom or bathroom mirror. Natural iPhone lighting. Relaxed confident pose — not overly posed or flexed. Natural skin texture, pores visible. Waist up framing.",
   },
   {
     type: "shirtless",
-    count: 2,
-    prefix: "PHOTO TYPE: Shirtless photo of the subject showing natural physique. No shirt on. Casual indoor or outdoor setting. Natural iPhone lighting. Relaxed confident pose — not overly posed or flexed. Natural skin texture, pores, and body hair fully visible. Waist up or full body framing.",
+    prefix: "PHOTO TYPE: Shirtless photo of the subject showing natural physique. No shirt on. Outdoor casual setting — balcony, poolside, or beach. Natural sunlight. Standing or leaning, confident but relaxed. Natural skin texture, pores visible. Full body or waist up framing.",
+  },
+  // 4 lifestyle
+  {
+    type: "lifestyle",
+    prefix: "PHOTO TYPE: Lifestyle photo in a coffee shop or restaurant. The subject is sitting at a table, holding a cup, or looking at their phone. Wearing casual everyday clothes. Full or 3/4 body visible. Candid, natural moment. Warm indoor lighting.",
   },
   {
     type: "lifestyle",
-    count: 4,
-    prefix: "PHOTO TYPE: Lifestyle photo in a natural everyday setting (coffee shop, park, city street, gym, apartment, rooftop, beach, restaurant, etc.). Full body or 3/4 body visible. The subject is in a candid moment — walking, sitting, leaning against a wall, or interacting naturally with the environment. Wearing casual everyday clothes. Each image should be a DIFFERENT setting/location.",
+    prefix: "PHOTO TYPE: Lifestyle photo on a city street or urban setting. The subject is walking, standing on a sidewalk, or leaning against a wall. Wearing casual everyday clothes. Full or 3/4 body visible. Natural daylight. Candid feel.",
+  },
+  {
+    type: "lifestyle",
+    prefix: "PHOTO TYPE: Lifestyle photo at a park, beach, or outdoor nature setting. The subject is sitting on grass, walking a trail, or standing with scenery behind them. Wearing casual everyday clothes. Full or 3/4 body visible. Natural sunlight.",
+  },
+  {
+    type: "lifestyle",
+    prefix: "PHOTO TYPE: Lifestyle photo at home, gym, or casual indoor setting. The subject is on a couch, working out, cooking, or in a relaxed indoor moment. Wearing casual everyday clothes or athletic wear. Full or 3/4 body visible. Natural indoor lighting.",
   },
 ];
 
@@ -223,10 +247,10 @@ export async function generateContentForPersona(
   }
 
   try {
-    // Submit generation jobs sequentially with retry on rate limit
-    for (let si = 0; si < CONTENT_BATCH_SPECS.length; si++) {
-      const spec = CONTENT_BATCH_SPECS[si];
-      const fullPrompt = `${spec.prefix}\n\nQUALITY PARAMETERS:\n${basePrompt}`;
+    // Submit 9 individual MCP calls (1 per image) with rate limit retry
+    for (let i = 0; i < CONTENT_BATCH_IMAGES.length; i++) {
+      const img = CONTENT_BATCH_IMAGES[i];
+      const fullPrompt = `${img.prefix}\n\nQUALITY PARAMETERS:\n${basePrompt}`;
 
       let genResult;
       for (let attempt = 0; attempt < 3; attempt++) {
@@ -234,13 +258,12 @@ export async function generateContentForPersona(
           genResult = await generateImages(
             persona.higgsfield_soul_id,
             fullPrompt,
-            spec.count
+            1
           );
           break;
         } catch (retryErr) {
           const msg = retryErr instanceof Error ? retryErr.message : String(retryErr);
           if (msg.includes("Rate limit") || msg.includes("rate limit") || msg.includes("concurrent")) {
-            // Wait before retrying (15s, 30s, 45s)
             await new Promise((r) => setTimeout(r, (attempt + 1) * 15000));
           } else {
             throw retryErr;
@@ -249,7 +272,7 @@ export async function generateContentForPersona(
       }
 
       if (!genResult) {
-        throw new Error(`Rate limit exceeded after 3 retries for ${spec.type} images`);
+        throw new Error(`Rate limit exceeded after retries for ${img.type} image ${i + 1}`);
       }
 
       await db.from("generation_logs").insert({
@@ -257,13 +280,13 @@ export async function generateContentForPersona(
         persona_id: personaId,
         higgsfield_job_id: genResult.jobId,
         prompt: fullPrompt,
-        image_type: spec.type,
+        image_type: img.type,
         status: "processing",
       });
 
-      // Small delay between submissions to avoid hitting rate limit
-      if (si < CONTENT_BATCH_SPECS.length - 1) {
-        await new Promise((r) => setTimeout(r, 2000));
+      // Brief delay between submissions to avoid rate limit
+      if (i < CONTENT_BATCH_IMAGES.length - 1) {
+        await new Promise((r) => setTimeout(r, 1500));
       }
     }
 
