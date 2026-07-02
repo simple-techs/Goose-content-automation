@@ -167,6 +167,60 @@ async function pollForCompletion(
   throw new Error(`Generation job ${jobId} timed out after ${maxAttempts} attempts`);
 }
 
+// Content batch structure: 3 selfies + 2 shirtless + 5 lifestyle = 10 images per batch
+const CONTENT_BATCH_SPECS = [
+  {
+    type: "selfie",
+    count: 3,
+    suffix: "Close-up selfie photo taken with front-facing iPhone camera. Slightly different facial expression and head angle for each shot — as if taken in a row in the same moment. Casual, candid feel. Arm extended or slightly visible holding the phone.",
+  },
+  {
+    type: "shirtless",
+    count: 2,
+    suffix: "Shirtless photo showing natural physique. Casual setting, natural iPhone lighting. Relaxed confident pose, not overly posed or flexed. Natural skin texture visible.",
+  },
+  {
+    type: "lifestyle",
+    count: 5,
+    suffix: "Lifestyle photo in a natural everyday setting (coffee shop, park, street, gym, home, rooftop, etc.). Full or 3/4 body visible. Candid moment — walking, sitting, leaning, or interacting with the environment. Wearing casual everyday clothes.",
+  },
+];
+
+async function generateImageSet(
+  soulId: string,
+  basePrompt: string,
+  spec: { type: string; count: number; suffix: string }
+): Promise<{ type: string; urls: string[] }> {
+  const fullPrompt = `${basePrompt}\n\n${spec.suffix}`;
+  const urls: string[] = [];
+
+  // Higgsfield MCP caps at 4 per call, so split if needed
+  const remaining = spec.count;
+  const batchSize = Math.min(remaining, 4);
+  const genResult = await generateImages(soulId, fullPrompt, batchSize);
+
+  if (genResult.images && genResult.images.length > 0) {
+    urls.push(...genResult.images);
+  } else {
+    const completed = await pollForCompletion(genResult.jobId);
+    urls.push(...completed);
+  }
+
+  // If we need more than 4 (not currently the case but future-proof)
+  if (remaining > 4) {
+    const extra = remaining - 4;
+    const genResult2 = await generateImages(soulId, fullPrompt, extra);
+    if (genResult2.images && genResult2.images.length > 0) {
+      urls.push(...genResult2.images);
+    } else {
+      const completed2 = await pollForCompletion(genResult2.jobId);
+      urls.push(...completed2);
+    }
+  }
+
+  return { type: spec.type, urls: urls.slice(0, spec.count) };
+}
+
 export async function generateContentForPersona(
   personaId: string,
   customPrompt?: string
@@ -187,8 +241,7 @@ export async function generateContentForPersona(
   }
 
   const settings = await getSettings();
-  const prompt = customPrompt || settings.default_prompt;
-  const count = settings.generation_count;
+  const basePrompt = customPrompt || settings.default_prompt;
 
   const now = new Date();
   const batchName = `Batch - ${now.toISOString().split("T")[0]}`;
@@ -207,26 +260,28 @@ export async function generateContentForPersona(
   }
 
   try {
-    const genResult = await generateImages(persona.higgsfield_soul_id, prompt, count);
+    // Generate all 10 images: 3 selfies + 2 shirtless + 5 lifestyle
+    const allImageUrls: { type: string; url: string }[] = [];
 
-    await db.from("generation_logs").insert({
-      batch_id: batch.id,
-      persona_id: personaId,
-      higgsfield_job_id: genResult.jobId,
-      prompt,
-      status: "processing",
-    });
+    for (const spec of CONTENT_BATCH_SPECS) {
+      const fullPrompt = `${basePrompt}\n\n${spec.suffix}`;
 
-    let imageUrls: string[];
-    if (genResult.images && genResult.images.length > 0) {
-      imageUrls = genResult.images;
-    } else {
-      imageUrls = await pollForCompletion(genResult.jobId);
+      await db.from("generation_logs").insert({
+        batch_id: batch.id,
+        persona_id: personaId,
+        prompt: fullPrompt,
+        status: "processing",
+      });
+
+      const result = await generateImageSet(persona.higgsfield_soul_id, basePrompt, spec);
+      for (const url of result.urls) {
+        allImageUrls.push({ type: result.type, url });
+      }
     }
 
     await db
       .from("generation_logs")
-      .update({ status: "completed", output_url: imageUrls.join(",") })
+      .update({ status: "completed" })
       .eq("batch_id", batch.id);
 
     await db
@@ -237,9 +292,11 @@ export async function generateContentForPersona(
     const subfolder = await createSubfolder(persona.drive_folder_id, batchName);
 
     const uploadedFiles = [];
-    for (let i = 0; i < imageUrls.length; i++) {
-      const imgBuffer = await downloadGeneratedImage(imageUrls[i]);
-      const fileName = `${persona.name}_${now.toISOString().split("T")[0]}_${i + 1}.png`;
+    for (let i = 0; i < allImageUrls.length; i++) {
+      const { type, url } = allImageUrls[i];
+      const typeIndex = allImageUrls.slice(0, i + 1).filter((x) => x.type === type).length;
+      const imgBuffer = await downloadGeneratedImage(url);
+      const fileName = `${persona.name}_${type}_${typeIndex}_${now.toISOString().split("T")[0]}.png`;
       const uploaded = await uploadImageToFolder(subfolder.id, fileName, imgBuffer);
       uploadedFiles.push(uploaded);
     }
@@ -268,7 +325,6 @@ export async function generateContentForPersona(
           .update({ slack_notified: true })
           .eq("id", batch.id);
       } catch {
-        // Slack notification is non-critical; log but don't fail
         console.error("Slack notification failed for batch", batch.id);
       }
     }

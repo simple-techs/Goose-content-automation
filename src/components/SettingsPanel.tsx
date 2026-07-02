@@ -214,21 +214,19 @@ export default function SettingsPanel() {
 
       <div>
         <label className="block text-sm font-medium text-gray-700">
-          Images per Batch
+          Batch Structure
         </label>
-        <input
-          type="number"
-          min={1}
-          max={20}
-          value={settings.generation_count}
-          onChange={(e) =>
-            setSettings({
-              ...settings,
-              generation_count: parseInt(e.target.value) || 4,
-            })
-          }
-          className="mt-1 block w-24 rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-        />
+        <div className="mt-1 rounded-md border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
+          <p className="font-medium">10 images per batch:</p>
+          <ul className="mt-1 list-disc pl-5 text-xs text-gray-600 space-y-0.5">
+            <li>3 selfies (taken in a row, slightly different expressions/angles)</li>
+            <li>2 shirtless photos (natural physique, casual setting)</li>
+            <li>5 lifestyle photos (everyday settings, candid moments)</li>
+          </ul>
+          <p className="mt-2 text-xs text-gray-500">
+            Each type uses the Content Generation Prompt above as the base, with type-specific instructions appended automatically.
+          </p>
+        </div>
       </div>
 
       <div className="border-t border-gray-200 pt-4">
