@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import crypto from "crypto";
 
+const MCP_CLIENT_ID = "M1DkV4hbpsSrgjfW";
+const MCP_AUTHORIZE_URL = "https://mcp.higgsfield.ai/oauth2/authorize";
+
 export async function GET() {
   const codeVerifier = crypto.randomBytes(32).toString("base64url");
   const codeChallenge = crypto
@@ -15,16 +18,16 @@ export async function GET() {
   const redirectUri = `${appUrl}/api/auth/higgsfield/callback`;
 
   const params = new URLSearchParams({
-    client_id: "sRGCQJvvJkPrrtRj",
+    client_id: MCP_CLIENT_ID,
     code_challenge: codeChallenge,
     code_challenge_method: "S256",
     redirect_uri: redirectUri,
     response_type: "code",
-    scope: "email profile offline_access user:org:read",
+    scope: "openid email offline_access",
     state,
   });
 
-  const authUrl = `https://clerk.higgsfield.ai/oauth/authorize?${params.toString()}`;
+  const authUrl = `${MCP_AUTHORIZE_URL}?${params.toString()}`;
 
   const response = NextResponse.redirect(authUrl);
   response.cookies.set("hf_code_verifier", codeVerifier, {

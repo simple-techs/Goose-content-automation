@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 
+const MCP_CLIENT_ID = "M1DkV4hbpsSrgjfW";
+const MCP_TOKEN_URL = "https://mcp.higgsfield.ai/oauth2/token";
+
 export async function GET(req: NextRequest) {
   const code = req.nextUrl.searchParams.get("code");
   const state = req.nextUrl.searchParams.get("state");
@@ -37,22 +40,21 @@ export async function GET(req: NextRequest) {
     process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
   const redirectUri = `${appUrl}/api/auth/higgsfield/callback`;
 
-  const tokenRes = await fetch("https://clerk.higgsfield.ai/oauth/token", {
+  const tokenRes = await fetch(MCP_TOKEN_URL, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
       grant_type: "authorization_code",
       code,
       redirect_uri: redirectUri,
-      client_id: "sRGCQJvvJkPrrtRj",
-      client_secret: "5gXwyIMviMKs44qj",
+      client_id: MCP_CLIENT_ID,
       code_verifier: codeVerifier,
     }),
   });
 
   if (!tokenRes.ok) {
     const errText = await tokenRes.text();
-    console.error("Higgsfield token exchange failed:", errText);
+    console.error("MCP OAuth token exchange failed:", errText);
     return NextResponse.redirect(
       new URL(
         `/?error=${encodeURIComponent("Token exchange failed: " + tokenRes.status)}`,
@@ -63,9 +65,9 @@ export async function GET(req: NextRequest) {
 
   const tokenData = await tokenRes.json();
   const accessToken: string = tokenData.access_token;
-  const refreshToken: string = tokenData.refresh_token;
+  const refreshToken: string | undefined = tokenData.refresh_token;
 
-  // Decode JWT to extract user_id and workspace_id
+  // Decode JWT to extract user info
   let userId = "";
   let workspaceId = "";
   let email = "";
@@ -74,42 +76,35 @@ export async function GET(req: NextRequest) {
       Buffer.from(accessToken.split(".")[1], "base64url").toString()
     );
     userId = payload.sub || "";
-    workspaceId = payload.workspace_id || "";
+    workspaceId = payload.workspace_id || payload.org_id || "";
     email = payload.email || "";
   } catch {
-    console.error("Failed to decode Higgsfield JWT");
+    console.error("Failed to decode MCP OAuth JWT");
   }
 
-  // If we couldn't extract from JWT, try the userinfo endpoint
-  if (!userId) {
-    try {
-      const userRes = await fetch(
-        "https://clerk.higgsfield.ai/oauth/userinfo",
-        {
-          headers: { Authorization: `Bearer ${accessToken}` },
-        }
-      );
-      if (userRes.ok) {
-        const userData = await userRes.json();
-        userId = userData.sub || userData.user_id || "";
-        email = userData.email || email;
-      }
-    } catch {
-      // non-fatal
-    }
+  const updateData: Record<string, string | null> = {
+    higgsfield_access_token: accessToken,
+    higgsfield_connected_at: new Date().toISOString(),
+    higgsfield_token_updated_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+
+  if (refreshToken) {
+    updateData.higgsfield_refresh_token = refreshToken;
+  }
+  if (userId) {
+    updateData.higgsfield_user_id = userId;
+  }
+  if (workspaceId) {
+    updateData.higgsfield_workspace_id = workspaceId;
+  }
+  if (email) {
+    updateData.higgsfield_email = email;
   }
 
   await getSupabaseAdmin()
     .from("app_settings")
-    .update({
-      higgsfield_access_token: accessToken,
-      higgsfield_refresh_token: refreshToken,
-      higgsfield_user_id: userId,
-      higgsfield_workspace_id: workspaceId,
-      higgsfield_email: email,
-      higgsfield_connected_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    })
+    .update(updateData)
     .not("id", "is", null);
 
   const response = NextResponse.redirect(new URL("/?tab=settings", req.url));

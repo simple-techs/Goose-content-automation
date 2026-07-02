@@ -1,6 +1,8 @@
 import { getSupabaseAdmin } from "./supabase";
 
 const HIGGSFIELD_API_BASE = "https://fnf.higgsfield.ai";
+const MCP_TOKEN_URL = "https://mcp.higgsfield.ai/oauth2/token";
+const MCP_CLIENT_ID = "M1DkV4hbpsSrgjfW";
 
 export interface SoulIdResult {
   soulId: string;
@@ -15,8 +17,8 @@ export interface GenerationResult {
 
 interface HiggsFieldAuth {
   api_key: string;
-  session_token: string | null;
-  session_token_age_seconds: number | null;
+  access_token: string | null;
+  refresh_token: string | null;
   user_id: string;
   workspace_id: string;
 }
@@ -31,7 +33,7 @@ async function getAuth(): Promise<HiggsFieldAuth> {
 
   const { data } = await getSupabaseAdmin()
     .from("app_settings")
-    .select("higgsfield_user_id, higgsfield_workspace_id, higgsfield_access_token, higgsfield_token_updated_at")
+    .select("higgsfield_user_id, higgsfield_workspace_id, higgsfield_access_token, higgsfield_refresh_token, higgsfield_token_updated_at")
     .limit(1)
     .single();
 
@@ -41,17 +43,65 @@ async function getAuth(): Promise<HiggsFieldAuth> {
     );
   }
 
-  const tokenAge = data.higgsfield_token_updated_at
-    ? Math.floor((Date.now() - new Date(data.higgsfield_token_updated_at).getTime()) / 1000)
-    : null;
-
   return {
     api_key: apiKey,
-    session_token: data.higgsfield_access_token || null,
-    session_token_age_seconds: tokenAge,
+    access_token: data.higgsfield_access_token || null,
+    refresh_token: data.higgsfield_refresh_token || null,
     user_id: data.higgsfield_user_id,
     workspace_id: data.higgsfield_workspace_id,
   };
+}
+
+async function refreshAccessToken(refreshToken: string): Promise<string> {
+  const res = await fetch(MCP_TOKEN_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+      client_id: MCP_CLIENT_ID,
+    }),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(
+      `Token refresh failed (${res.status}): ${errText}. Reconnect Higgsfield in Settings.`
+    );
+  }
+
+  const data = await res.json();
+  const newAccessToken: string = data.access_token;
+  const newRefreshToken: string | undefined = data.refresh_token;
+
+  const updateData: Record<string, string> = {
+    higgsfield_access_token: newAccessToken,
+    higgsfield_token_updated_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+
+  if (newRefreshToken) {
+    updateData.higgsfield_refresh_token = newRefreshToken;
+  }
+
+  await getSupabaseAdmin()
+    .from("app_settings")
+    .update(updateData)
+    .not("id", "is", null);
+
+  return newAccessToken;
+}
+
+async function getMcpAccessToken(): Promise<string> {
+  const auth = await getAuth();
+
+  if (!auth.refresh_token) {
+    throw new Error(
+      "Higgsfield not connected for generation. Go to Settings and click 'Connect Higgsfield'."
+    );
+  }
+
+  return refreshAccessToken(auth.refresh_token);
 }
 
 function buildHeaders(auth: HiggsFieldAuth): Record<string, string> {
@@ -92,7 +142,6 @@ async function uploadImage(
   imageBuffer: Buffer,
   imageName: string
 ): Promise<string> {
-  // Step 1: Upload image to get media ID + presigned upload URL
   const formData = new FormData();
   const uint8 = new Uint8Array(imageBuffer);
   const blob = new Blob([uint8], { type: "image/jpeg" });
@@ -118,7 +167,6 @@ async function uploadImage(
     );
   }
 
-  // Step 2: PUT the actual image bytes to the presigned S3 URL
   if (uploadUrl) {
     const putRes = await fetch(uploadUrl, {
       method: "PUT",
@@ -133,7 +181,6 @@ async function uploadImage(
     }
   }
 
-  // Step 3: Confirm the upload
   const confirmRes = await apiCall(
     `/developer/v2alpha/media/${mediaId}/confirm?type=image`,
     { method: "POST" }
@@ -152,14 +199,12 @@ export async function createSoulId(
   imageBuffers: Buffer[],
   imageNames: string[]
 ): Promise<SoulIdResult> {
-  // Upload and confirm all images
   const mediaIds: string[] = [];
   for (let i = 0; i < imageBuffers.length; i++) {
     const mediaId = await uploadImage(imageBuffers[i], imageNames[i]);
     mediaIds.push(mediaId);
   }
 
-  // Step 4: Create the soul with confirmed media IDs
   const res = await apiCall("/developer/v2alpha/souls", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -205,24 +250,13 @@ export async function generateImages(
   prompt: string,
   count: number = 4
 ): Promise<GenerationResult> {
+  const accessToken = await getMcpAccessToken();
   const auth = await getAuth();
-
-  if (!auth.session_token) {
-    throw new Error(
-      "Token bridge not active. Open higgsfield.ai and run the bridge command from Settings."
-    );
-  }
-
-  if (auth.session_token_age_seconds !== null && auth.session_token_age_seconds > 55) {
-    throw new Error(
-      "Token expired. Make sure higgsfield.ai is open and the token bridge is running."
-    );
-  }
 
   const mcpRes = await fetch("https://mcp.higgsfield.ai/mcp", {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${auth.session_token}`,
+      Authorization: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
       Accept: "application/json, text/event-stream",
       "X-Fnf-Surface": "mcp",
@@ -262,7 +296,7 @@ export async function generateImages(
     const errMsg = structured?.error || content?.[0]?.text || "Unknown error";
     if (errMsg.includes("Invalid or expired token")) {
       throw new Error(
-        "Token expired during generation. Refresh higgsfield.ai tab and try again."
+        "Higgsfield auth expired. Go to Settings and reconnect Higgsfield."
       );
     }
     throw new Error(`Generation failed: ${errMsg}`);
@@ -305,7 +339,6 @@ export async function generateImages(
 export async function getGenerationStatus(
   jobId: string
 ): Promise<GenerationResult> {
-  // Polling uses API key (works for GET /jobs/{id})
   const res = await apiCall(`/developer/v2alpha/jobs/${jobId}`);
 
   if (!res.ok) {

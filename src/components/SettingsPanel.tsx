@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 import type { AppSettings } from "@/lib/types";
 
 export default function SettingsPanel() {
@@ -8,19 +8,6 @@ export default function SettingsPanel() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
-  const [bridgeStatus, setBridgeStatus] = useState<{
-    fresh: boolean;
-    ageSeconds: number | null;
-    hasToken: boolean;
-  } | null>(null);
-  const [copied, setCopied] = useState(false);
-
-  const checkBridgeStatus = useCallback(() => {
-    fetch("/api/settings/higgsfield-token")
-      .then((r) => r.json())
-      .then((d) => setBridgeStatus(d))
-      .catch(() => {});
-  }, []);
 
   useEffect(() => {
     fetch("/api/settings")
@@ -34,11 +21,7 @@ export default function SettingsPanel() {
       })
       .catch(() => setMessage("Failed to load settings"))
       .finally(() => setLoading(false));
-
-    checkBridgeStatus();
-    const interval = setInterval(checkBridgeStatus, 10000);
-    return () => clearInterval(interval);
-  }, [checkBridgeStatus]);
+  }, []);
 
   const handleSave = async () => {
     if (!settings) return;
@@ -146,48 +129,31 @@ export default function SettingsPanel() {
 
           <div className="rounded-md border border-gray-200 bg-gray-50 p-3">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-gray-700">Token Bridge for Generation</span>
-              {bridgeStatus && (
-                <span
-                  className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium ${
-                    bridgeStatus.fresh
-                      ? "bg-green-100 text-green-700"
-                      : "bg-yellow-100 text-yellow-700"
-                  }`}
-                >
-                  <span
-                    className={`h-1.5 w-1.5 rounded-full ${
-                      bridgeStatus.fresh ? "bg-green-500" : "bg-yellow-500"
-                    }`}
-                  />
-                  {bridgeStatus.fresh
-                    ? "Active"
-                    : bridgeStatus.hasToken
-                      ? "Expired"
-                      : "Not connected"}
+              <span className="text-xs font-medium text-gray-700">Image Generation Auth</span>
+              {settings.higgsfield_refresh_token ? (
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700">
+                  <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
+                  Connected
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">
+                  <span className="h-1.5 w-1.5 rounded-full bg-gray-400" />
+                  Not connected
                 </span>
               )}
             </div>
             <p className="mt-1 text-xs text-gray-500">
-              To enable image generation, keep <a href="https://higgsfield.ai" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">higgsfield.ai</a> open (signed in) and run the bridge command in its console (F12 &rarr; Console). Fresh tokens are minted every 15s.
+              {settings.higgsfield_refresh_token
+                ? "Higgsfield OAuth connected. Tokens refresh automatically for image generation."
+                : "Connect your Higgsfield account to enable image generation. One-time sign-in — tokens refresh automatically."}
             </p>
             <div className="mt-2">
               <button
-                onClick={() => {
-                  const appUrl = window.location.origin;
-                  const cmd = `(async function(){var u='${appUrl}/api/bridge?t=';var c=await fetch('https://clerk.higgsfield.ai/v1/client',{credentials:'include'}).then(function(r){return r.json()});var sid=c.response.last_active_session_id;if(!sid)return console.error('[Bridge] No active session');async function s(){try{var r=await fetch('https://clerk.higgsfield.ai/v1/client/sessions/'+sid+'/tokens',{method:'POST',credentials:'include'});var d=await r.json();if(!d.jwt)return console.warn('[Bridge] No JWT');var img=new Image();img.onload=function(){console.log('[Bridge] Fresh token sent')};img.onerror=function(){console.warn('[Bridge] Send failed')};img.src=u+encodeURIComponent(d.jwt)+'&_='+Date.now()}catch(e){console.error('[Bridge]',e)}}s();setInterval(s,15000);document.addEventListener('visibilitychange',function(){if(!document.hidden)s()});window.addEventListener('focus',s);console.log('[Bridge] Active - fresh tokens every 15s + on tab focus')})()`;
-                  navigator.clipboard.writeText(cmd).then(() => {
-                    setCopied(true);
-                    setTimeout(() => setCopied(false), 3000);
-                  });
-                }}
+                onClick={() => window.location.href = "/api/auth/higgsfield"}
                 className="rounded-md bg-gray-800 px-3 py-1.5 text-xs font-medium text-white hover:bg-gray-900"
               >
-                {copied ? "Copied!" : "Copy Bridge Command"}
+                {settings.higgsfield_refresh_token ? "Reconnect Higgsfield" : "Connect Higgsfield"}
               </button>
-              <span className="ml-2 text-xs text-gray-400">
-                Paste into higgsfield.ai console
-              </span>
             </div>
           </div>
         </div>
