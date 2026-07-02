@@ -101,7 +101,13 @@ async function uploadImage(
   }
 
   const data = await res.json();
-  return data.id || data.media_id;
+  const mediaInputId = data.media_input_id || data.id || data.media_id;
+  if (!mediaInputId) {
+    throw new Error(
+      `Image upload returned unexpected response: ${JSON.stringify(data)}`
+    );
+  }
+  return mediaInputId;
 }
 
 export async function createSoulId(
@@ -121,7 +127,7 @@ export async function createSoulId(
     body: JSON.stringify({
       name,
       type: "soul_2",
-      images: mediaIds.map((id) => ({ id, type: "media_input" })),
+      images: mediaIds.map((mid) => ({ media_input_id: mid })),
     }),
   });
 
