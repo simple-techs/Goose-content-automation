@@ -168,63 +168,34 @@ async function pollForCompletion(
 }
 
 // Content batch structure: 3 selfies + 2 shirtless + 5 lifestyle = 10 images per batch
+// Type-specific prompt goes FIRST so it's the primary instruction, base quality prompt follows
 const CONTENT_BATCH_SPECS = [
   {
     type: "selfie",
     count: 3,
-    suffix: "Close-up selfie photo taken with front-facing iPhone camera. Slightly different facial expression and head angle for each shot — as if taken in a row in the same moment. Casual, candid feel. Arm extended or slightly visible holding the phone.",
+    prefix: "PHOTO TYPE: Close-up selfie taken with front-facing iPhone camera. The subject's arm is extended or slightly visible holding the phone. Frame from chest/shoulders up. Each image should have a slightly different facial expression and head angle — as if 3 selfies were taken in a row in the same moment. Casual, candid feel.",
   },
   {
     type: "shirtless",
     count: 2,
-    suffix: "Shirtless photo showing natural physique. Casual setting, natural iPhone lighting. Relaxed confident pose, not overly posed or flexed. Natural skin texture visible.",
+    prefix: "PHOTO TYPE: Shirtless photo of the subject showing natural physique. No shirt on. Casual indoor or outdoor setting. Natural iPhone lighting. Relaxed confident pose — not overly posed or flexed. Natural skin texture, pores, and body hair fully visible. Waist up or full body framing.",
   },
   {
     type: "lifestyle",
-    count: 5,
-    suffix: "Lifestyle photo in a natural everyday setting (coffee shop, park, street, gym, home, rooftop, etc.). Full or 3/4 body visible. Candid moment — walking, sitting, leaning, or interacting with the environment. Wearing casual everyday clothes.",
+    count: 4,
+    prefix: "PHOTO TYPE: Lifestyle photo in a natural everyday setting (coffee shop, park, city street, gym, apartment, rooftop, beach, restaurant, etc.). Full body or 3/4 body visible. The subject is in a candid moment — walking, sitting, leaning against a wall, or interacting naturally with the environment. Wearing casual everyday clothes. Each image should be a DIFFERENT setting/location.",
+  },
+  {
+    type: "lifestyle",
+    count: 1,
+    prefix: "PHOTO TYPE: Lifestyle photo in a unique everyday setting different from typical locations. Could be a bookstore, record shop, farmers market, hiking trail, basketball court, or similar. Full body or 3/4 body visible. Candid natural moment. Wearing casual everyday clothes.",
   },
 ];
-
-async function generateImageSet(
-  soulId: string,
-  basePrompt: string,
-  spec: { type: string; count: number; suffix: string }
-): Promise<{ type: string; urls: string[] }> {
-  const fullPrompt = `${basePrompt}\n\n${spec.suffix}`;
-  const urls: string[] = [];
-
-  // Higgsfield MCP caps at 4 per call, so split if needed
-  const remaining = spec.count;
-  const batchSize = Math.min(remaining, 4);
-  const genResult = await generateImages(soulId, fullPrompt, batchSize);
-
-  if (genResult.images && genResult.images.length > 0) {
-    urls.push(...genResult.images);
-  } else {
-    const completed = await pollForCompletion(genResult.jobId);
-    urls.push(...completed);
-  }
-
-  // If we need more than 4 (not currently the case but future-proof)
-  if (remaining > 4) {
-    const extra = remaining - 4;
-    const genResult2 = await generateImages(soulId, fullPrompt, extra);
-    if (genResult2.images && genResult2.images.length > 0) {
-      urls.push(...genResult2.images);
-    } else {
-      const completed2 = await pollForCompletion(genResult2.jobId);
-      urls.push(...completed2);
-    }
-  }
-
-  return { type: spec.type, urls: urls.slice(0, spec.count) };
-}
 
 export async function generateContentForPersona(
   personaId: string,
   customPrompt?: string
-): Promise<{ batchId: string; folderUrl: string; imageCount: number }> {
+): Promise<{ batchId: string }> {
   const db = getSupabaseAdmin();
   const { data: persona, error } = await db
     .from("personas")
@@ -243,9 +214,6 @@ export async function generateContentForPersona(
   const settings = await getSettings();
   const basePrompt = customPrompt || settings.default_prompt;
 
-  const now = new Date();
-  const batchName = `Batch - ${now.toISOString().split("T")[0]}`;
-
   const { data: batch, error: batchErr } = await db
     .from("batches")
     .insert({
@@ -260,94 +228,185 @@ export async function generateContentForPersona(
   }
 
   try {
-    // Generate all 10 images: 3 selfies + 2 shirtless + 5 lifestyle
-    const allImageUrls: { type: string; url: string }[] = [];
-
+    // Submit all generation jobs immediately (no polling — that happens async)
     for (const spec of CONTENT_BATCH_SPECS) {
-      const fullPrompt = `${basePrompt}\n\n${spec.suffix}`;
+      // Type-specific prompt FIRST, then base quality parameters
+      const fullPrompt = `${spec.prefix}\n\nQUALITY PARAMETERS:\n${basePrompt}`;
+
+      const genResult = await generateImages(
+        persona.higgsfield_soul_id,
+        fullPrompt,
+        spec.count
+      );
 
       await db.from("generation_logs").insert({
         batch_id: batch.id,
         persona_id: personaId,
+        higgsfield_job_id: genResult.jobId,
         prompt: fullPrompt,
+        image_type: spec.type,
         status: "processing",
       });
-
-      const result = await generateImageSet(persona.higgsfield_soul_id, basePrompt, spec);
-      for (const url of result.urls) {
-        allImageUrls.push({ type: result.type, url });
-      }
     }
 
-    await db
-      .from("generation_logs")
-      .update({ status: "completed" })
-      .eq("batch_id", batch.id);
-
-    await db
-      .from("batches")
-      .update({ status: "uploading" })
-      .eq("id", batch.id);
-
-    const subfolder = await createSubfolder(persona.drive_folder_id, batchName);
-
-    const uploadedFiles = [];
-    for (let i = 0; i < allImageUrls.length; i++) {
-      const { type, url } = allImageUrls[i];
-      const typeIndex = allImageUrls.slice(0, i + 1).filter((x) => x.type === type).length;
-      const imgBuffer = await downloadGeneratedImage(url);
-      const fileName = `${persona.name}_${type}_${typeIndex}_${now.toISOString().split("T")[0]}.png`;
-      const uploaded = await uploadImageToFolder(subfolder.id, fileName, imgBuffer);
-      uploadedFiles.push(uploaded);
-    }
-
-    await db
-      .from("batches")
-      .update({
-        drive_subfolder_id: subfolder.id,
-        drive_subfolder_url: subfolder.webViewLink,
-        image_count: uploadedFiles.length,
-        status: "completed",
-      })
-      .eq("id", batch.id);
-
-    if (settings.slack_webhook_url) {
-      try {
-        await sendSlackNotification(
-          settings.slack_webhook_url,
-          persona.name,
-          subfolder.webViewLink,
-          uploadedFiles.length,
-          settings.slack_channel || undefined
-        );
-        await db
-          .from("batches")
-          .update({ slack_notified: true })
-          .eq("id", batch.id);
-      } catch {
-        console.error("Slack notification failed for batch", batch.id);
-      }
-    }
-
-    return {
-      batchId: batch.id,
-      folderUrl: subfolder.webViewLink,
-      imageCount: uploadedFiles.length,
-    };
+    return { batchId: batch.id };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await db
       .from("batches")
       .update({ status: "failed", error_message: message })
       .eq("id", batch.id);
-
-    await db
-      .from("generation_logs")
-      .update({ status: "failed", error_message: message })
-      .eq("batch_id", batch.id);
-
     throw err;
   }
+}
+
+export async function checkAndFinalizeGeneration(): Promise<{
+  checked: number;
+  completed: number;
+  stillProcessing: number;
+}> {
+  const db = getSupabaseAdmin();
+
+  // Find all batches in "generating" status
+  const { data: batches } = await db
+    .from("batches")
+    .select("id, persona_id")
+    .eq("status", "generating");
+
+  if (!batches || batches.length === 0) {
+    return { checked: 0, completed: 0, stillProcessing: 0 };
+  }
+
+  let completed = 0;
+  let stillProcessing = 0;
+
+  for (const batch of batches) {
+    // Get all generation logs for this batch
+    const { data: logs } = await db
+      .from("generation_logs")
+      .select("*")
+      .eq("batch_id", batch.id);
+
+    if (!logs || logs.length === 0) continue;
+
+    let allDone = true;
+    let anyFailed = false;
+
+    for (const log of logs) {
+      if (log.status === "completed" || log.status === "failed") continue;
+      if (!log.higgsfield_job_id) continue;
+
+      // Check job status on Higgsfield
+      try {
+        const jobResult = await getGenerationStatus(log.higgsfield_job_id);
+
+        if (jobResult.status === "completed" && jobResult.images && jobResult.images.length > 0) {
+          await db
+            .from("generation_logs")
+            .update({
+              status: "completed",
+              output_url: jobResult.images.join(","),
+            })
+            .eq("id", log.id);
+        } else if (jobResult.status === "failed") {
+          await db
+            .from("generation_logs")
+            .update({ status: "failed", error_message: "Generation job failed" })
+            .eq("id", log.id);
+          anyFailed = true;
+        } else {
+          allDone = false;
+        }
+      } catch {
+        allDone = false;
+      }
+    }
+
+    if (!allDone) {
+      stillProcessing++;
+      continue;
+    }
+
+    // All jobs done — download images and upload to Drive
+    try {
+      const { data: completedLogs } = await db
+        .from("generation_logs")
+        .select("*")
+        .eq("batch_id", batch.id)
+        .eq("status", "completed");
+
+      if (!completedLogs || completedLogs.length === 0) {
+        if (anyFailed) {
+          await db.from("batches").update({ status: "failed", error_message: "All generation jobs failed" }).eq("id", batch.id);
+        }
+        continue;
+      }
+
+      await db.from("batches").update({ status: "uploading" }).eq("id", batch.id);
+
+      const { data: persona } = await db
+        .from("personas")
+        .select("name, drive_folder_id")
+        .eq("id", batch.persona_id)
+        .single();
+
+      if (!persona) continue;
+
+      const now = new Date();
+      const batchName = `Batch - ${now.toISOString().split("T")[0]}`;
+      const subfolder = await createSubfolder(persona.drive_folder_id, batchName);
+
+      const uploadedFiles = [];
+      const typeCounts: Record<string, number> = {};
+
+      for (const log of completedLogs) {
+        const urls = (log.output_url || "").split(",").filter(Boolean);
+        const imageType = log.image_type || "general";
+
+        for (const url of urls) {
+          typeCounts[imageType] = (typeCounts[imageType] || 0) + 1;
+          const typeIndex = typeCounts[imageType];
+          const imgBuffer = await downloadGeneratedImage(url);
+          const fileName = `${persona.name}_${imageType}_${typeIndex}_${now.toISOString().split("T")[0]}.png`;
+          const uploaded = await uploadImageToFolder(subfolder.id, fileName, imgBuffer);
+          uploadedFiles.push(uploaded);
+        }
+      }
+
+      await db
+        .from("batches")
+        .update({
+          drive_subfolder_id: subfolder.id,
+          drive_subfolder_url: subfolder.webViewLink,
+          image_count: uploadedFiles.length,
+          status: "completed",
+        })
+        .eq("id", batch.id);
+
+      const settings = await getSettings();
+      if (settings.slack_webhook_url) {
+        try {
+          await sendSlackNotification(
+            settings.slack_webhook_url,
+            persona.name,
+            subfolder.webViewLink,
+            uploadedFiles.length,
+            settings.slack_channel || undefined
+          );
+          await db.from("batches").update({ slack_notified: true }).eq("id", batch.id);
+        } catch {
+          console.error("Slack notification failed for batch", batch.id);
+        }
+      }
+
+      completed++;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await db.from("batches").update({ status: "failed", error_message: message }).eq("id", batch.id);
+    }
+  }
+
+  return { checked: batches.length, completed, stillProcessing };
 }
 
 export async function runWeeklyGeneration(): Promise<{

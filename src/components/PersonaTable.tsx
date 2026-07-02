@@ -18,19 +18,30 @@ export default function PersonaTable({ personas, onRefresh }: PersonaTableProps)
 
   // Auto-poll training status when personas are in "onboarding" state
   const hasOnboarding = personas.some((p) => p.status === "onboarding" && p.higgsfield_soul_id);
+  const [hasGenerating, setHasGenerating] = useState(false);
 
   useEffect(() => {
-    if (hasOnboarding) {
-      // Poll every 15 seconds to check if soul training completed
+    if (hasOnboarding || hasGenerating) {
       pollingRef.current = setInterval(async () => {
         try {
-          const res = await fetch("/api/check-training", { method: "POST" });
-          const data = await res.json();
-          const hasUpdate = data.results?.some(
-            (r: { action: string }) => r.action === "generated_previews" || r.action === "marked_error"
-          );
-          if (hasUpdate) {
-            onRefresh();
+          // Check training status
+          if (hasOnboarding) {
+            const res = await fetch("/api/check-training", { method: "POST" });
+            const data = await res.json();
+            const hasTrainingUpdate = data.results?.some(
+              (r: { action: string }) => r.action === "generated_previews" || r.action === "marked_error"
+            );
+            if (hasTrainingUpdate) onRefresh();
+          }
+
+          // Check generation status
+          if (hasGenerating) {
+            const res = await fetch("/api/check-generation", { method: "POST" });
+            const data = await res.json();
+            if (data.completed > 0) {
+              onRefresh();
+              setHasGenerating(data.stillProcessing > 0);
+            }
           }
         } catch {
           // Silently ignore polling errors
@@ -44,7 +55,7 @@ export default function PersonaTable({ personas, onRefresh }: PersonaTableProps)
         pollingRef.current = null;
       }
     };
-  }, [hasOnboarding, onRefresh]);
+  }, [hasOnboarding, hasGenerating, onRefresh]);
 
   const toggleSelect = (id: string) => {
     setSelected((prev) => {
@@ -106,6 +117,8 @@ export default function PersonaTable({ personas, onRefresh }: PersonaTableProps)
           .map((r: { error?: string }) => r.error)
           .join("\n");
         alert(`${data.succeeded} succeeded, ${data.failed} failed:\n${errors}`);
+      } else {
+        setHasGenerating(true);
       }
       onRefresh();
     } finally {

@@ -37,33 +37,22 @@ export async function POST(req: NextRequest) {
     personaId: string;
     success: boolean;
     batchId?: string;
-    folderUrl?: string;
-    imageCount?: number;
     error?: string;
   }> = [];
 
-  const BATCH_SIZE = 5;
-
-  for (let i = 0; i < ids.length; i += BATCH_SIZE) {
-    const batch = ids.slice(i, i + BATCH_SIZE);
-    const promises = batch.map(async (id) => {
-      try {
-        const result = await generateContentForPersona(id, prompt);
-        return {
-          personaId: id,
-          success: true,
-          batchId: result.batchId,
-          folderUrl: result.folderUrl,
-          imageCount: result.imageCount,
-        };
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        return { personaId: id, success: false, error: message };
-      }
-    });
-
-    const batchResults = await Promise.all(promises);
-    results.push(...batchResults);
+  // Submit generation jobs one at a time (each submits 4 MCP calls)
+  for (const id of ids) {
+    try {
+      const result = await generateContentForPersona(id, prompt);
+      results.push({
+        personaId: id,
+        success: true,
+        batchId: result.batchId,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      results.push({ personaId: id, success: false, error: message });
+    }
   }
 
   return NextResponse.json({

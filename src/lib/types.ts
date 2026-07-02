@@ -29,6 +29,7 @@ export interface GenerationLog {
   persona_id: string;
   higgsfield_job_id: string | null;
   prompt: string;
+  image_type: string;
   status: "queued" | "processing" | "completed" | "failed";
   output_url: string | null;
   error_message: string | null;
