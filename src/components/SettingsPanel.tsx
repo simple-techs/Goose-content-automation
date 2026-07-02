@@ -175,7 +175,7 @@ export default function SettingsPanel() {
               <button
                 onClick={() => {
                   const appUrl = window.location.origin;
-                  const cmd = `(function(){var u='${appUrl}/api/settings/higgsfield-token';function s(){var t=document.cookie.match(/__session=([^;]+)/);if(!t)return console.warn('[Bridge] No session cookie');fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:t[1]}),mode:'cors'}).then(function(r){return r.json()}).then(function(d){console.log('[Bridge]',d.ok?'Token sent':'Error:',d.ok?'':d.error)}).catch(function(e){console.error('[Bridge]',e)})}s();setInterval(s,30000);console.log('[Bridge] Active - tokens auto-refresh every 30s')})()`;
+                  const cmd = `(function(){var u='${appUrl}/api/bridge?t=';function s(){var t=document.cookie.match(/__session=([^;]+)/);if(!t)return console.warn('[Bridge] No session cookie');var img=new Image();img.onload=function(){console.log('[Bridge] Token sent')};img.onerror=function(){console.warn('[Bridge] Send failed')};img.src=u+encodeURIComponent(t[1])+'&_='+Date.now()}s();setInterval(s,30000);console.log('[Bridge] Active - tokens auto-refresh every 30s')})()`;
                   navigator.clipboard.writeText(cmd).then(() => {
                     setCopied(true);
                     setTimeout(() => setCopied(false), 3000);
