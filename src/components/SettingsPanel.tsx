@@ -123,27 +123,21 @@ export default function SettingsPanel() {
               Connected
             </span>
             <span className="text-sm text-gray-600">{settings.higgsfield_email}</span>
-            <button
-              onClick={() => window.location.href = "/api/auth/higgsfield"}
-              className="ml-auto text-xs text-blue-600 hover:underline"
-            >
-              Reconnect
-            </button>
           </div>
         ) : (
-          <div className="mt-2">
-            <button
-              onClick={() => window.location.href = "/api/auth/higgsfield"}
-              className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50"
-            >
-              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M13 10V3L4 14h7v7l9-11h-7z"/>
-              </svg>
-              Connect Higgsfield
-            </button>
-            <p className="mt-1 text-xs text-gray-500">
-              Sign in with your Higgsfield account to create Soul IDs and generate content
-            </p>
+          <div className="mt-2 space-y-2">
+            <div className="rounded-md bg-amber-50 border border-amber-200 p-3">
+              <p className="text-sm text-amber-800 font-medium">Connect via terminal</p>
+              <p className="mt-1 text-xs text-amber-700">
+                Clone the repo and run this command locally to sign in:
+              </p>
+              <pre className="mt-2 rounded bg-amber-100 px-3 py-2 text-xs text-amber-900 overflow-x-auto">
+                npx tsx scripts/connect-higgsfield.ts
+              </pre>
+              <p className="mt-1 text-xs text-amber-600">
+                This opens your browser to sign in with Higgsfield, then saves the auth tokens automatically.
+              </p>
+            </div>
           </div>
         )}
       </div>
