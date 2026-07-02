@@ -116,22 +116,78 @@ export default function SettingsPanel() {
 
       <div className="border-b border-gray-200 pb-4">
         <h3 className="text-sm font-medium text-gray-700">Higgsfield Connection</h3>
-        {settings.higgsfield_email ? (
-          <div className="mt-2 flex items-center gap-3">
+        <div className="mt-2 space-y-3">
+          <div className="flex items-center gap-3">
             <span className="inline-flex items-center gap-1.5 rounded-full bg-green-100 px-3 py-1 text-xs font-medium text-green-700">
               <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
-              Connected
+              API Key Connected
             </span>
-            <span className="text-sm text-gray-600">{settings.higgsfield_email}</span>
+            {settings.higgsfield_email && (
+              <span className="text-sm text-gray-600">{settings.higgsfield_email}</span>
+            )}
           </div>
-        ) : (
-          <div className="mt-2">
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-yellow-100 px-3 py-1 text-xs font-medium text-yellow-700">
-              <span className="h-1.5 w-1.5 rounded-full bg-yellow-500" />
-              API Key configured via environment variable
-            </span>
+          <div>
+            <label className="block text-xs font-medium text-gray-600">
+              Session Token for Generation
+              <span className="ml-1 text-gray-400">(required before clicking Generate Content)</span>
+            </label>
+            <div className="mt-1 flex gap-2">
+              <input
+                type="password"
+                placeholder="Paste session token from higgsfield.ai"
+                className="block flex-1 rounded-md border border-gray-300 px-3 py-1.5 text-xs shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    const input = e.currentTarget;
+                    const token = input.value.trim();
+                    if (!token) return;
+                    fetch("/api/settings/higgsfield-token", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ token }),
+                    })
+                      .then((r) => r.json())
+                      .then((d) => {
+                        if (d.ok) {
+                          input.value = "";
+                          setMessage("Token saved — go generate content now");
+                        } else {
+                          setMessage(d.error || "Failed to save token");
+                        }
+                      });
+                  }
+                }}
+              />
+              <button
+                onClick={(e) => {
+                  const input = (e.currentTarget.previousElementSibling as HTMLInputElement);
+                  const token = input?.value?.trim();
+                  if (!token) return;
+                  fetch("/api/settings/higgsfield-token", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ token }),
+                  })
+                    .then((r) => r.json())
+                    .then((d) => {
+                      if (d.ok) {
+                        input.value = "";
+                        setMessage("Token saved — go generate content now");
+                      } else {
+                        setMessage(d.error || "Failed to save token");
+                      }
+                    });
+                }}
+                className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700"
+              >
+                Save
+              </button>
+            </div>
+            <p className="mt-1 text-xs text-gray-400">
+              On higgsfield.ai console: <code className="bg-gray-100 px-1 rounded">document.cookie.match(/__session=([^;]+)/)?.[1]</code>
+            </p>
           </div>
-        )}
+        </div>
       </div>
 
       <div>

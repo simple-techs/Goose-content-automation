@@ -15,6 +15,7 @@ export interface GenerationResult {
 
 interface HiggsFieldAuth {
   api_key: string;
+  session_token: string | null;
   user_id: string;
   workspace_id: string;
 }
@@ -29,7 +30,7 @@ async function getAuth(): Promise<HiggsFieldAuth> {
 
   const { data } = await getSupabaseAdmin()
     .from("app_settings")
-    .select("higgsfield_user_id, higgsfield_workspace_id")
+    .select("higgsfield_user_id, higgsfield_workspace_id, higgsfield_access_token")
     .limit(1)
     .single();
 
@@ -41,6 +42,7 @@ async function getAuth(): Promise<HiggsFieldAuth> {
 
   return {
     api_key: apiKey,
+    session_token: data.higgsfield_access_token || null,
     user_id: data.higgsfield_user_id,
     workspace_id: data.higgsfield_workspace_id,
   };
@@ -197,34 +199,96 @@ export async function generateImages(
   prompt: string,
   count: number = 4
 ): Promise<GenerationResult> {
-  const res = await apiCall("/developer/v2alpha/jobs", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      soul_id: soulId,
-      prompt,
-      num_images: count,
-    }),
-  });
-
-  if (!res.ok) {
-    const errText = await res.text();
+  const auth = await getAuth();
+  if (!auth.session_token) {
     throw new Error(
-      `Higgsfield generateImages failed (${res.status}): ${errText}`
+      "Higgsfield session token required for generation. Go to Settings and paste a fresh token from higgsfield.ai."
     );
   }
 
-  const data = await res.json();
-  return {
-    jobId: data.id || data.job_id || data.jobId,
-    status: data.status || "queued",
-    images: data.images || data.output_urls || [],
-  };
+  // Generation requires JWT via MCP (API key doesn't work for generation)
+  const mcpRes = await fetch("https://mcp.higgsfield.ai/mcp", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${auth.session_token}`,
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+      "X-Fnf-Surface": "mcp",
+      "X-Fnf-User-Id": auth.user_id,
+      "X-Fnf-Workspace-Id": auth.workspace_id,
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      method: "tools/call",
+      id: Date.now(),
+      params: {
+        name: "generate_image",
+        arguments: {
+          params: {
+            model: "soul_2",
+            prompt,
+            count: Math.min(count, 4),
+            soul_id: soulId,
+            aspect_ratio: "3:4",
+          },
+        },
+      },
+    }),
+  });
+
+  const text = await mcpRes.text();
+  const dataLine = text.split("\n").find((l: string) => l.startsWith("data: "));
+  if (!dataLine) {
+    throw new Error(`MCP generate_image returned no data: ${text.slice(0, 500)}`);
+  }
+
+  const parsed = JSON.parse(dataLine.slice(6));
+  const content = parsed?.result?.content;
+  const structured = parsed?.result?.structuredContent;
+
+  if (parsed?.result?.isError) {
+    const errMsg = structured?.error || content?.[0]?.text || "Unknown error";
+    throw new Error(`Higgsfield generation failed: ${errMsg}`);
+  }
+
+  // Extract job results from structured content
+  const results = structured?.results || [];
+  if (results.length > 0) {
+    const job = results[0];
+    return {
+      jobId: job.id,
+      status: job.status || "queued",
+      images: job.status === "completed" && job.result_url ? [job.result_url] : [],
+    };
+  }
+
+  // Fallback: parse text content for job info
+  const textContent = (content || [])
+    .filter((c: { type: string }) => c.type === "text")
+    .map((c: { text: string }) => c.text)
+    .join("\n");
+
+  const jobIdMatch = textContent.match(
+    /(?:job_id|id)[":\s]+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i
+  );
+
+  if (jobIdMatch) {
+    return {
+      jobId: jobIdMatch[1],
+      status: "queued",
+      images: [],
+    };
+  }
+
+  throw new Error(
+    `Could not parse generation response: ${textContent.slice(0, 500)}`
+  );
 }
 
 export async function getGenerationStatus(
   jobId: string
 ): Promise<GenerationResult> {
+  // Polling uses API key (works for GET /jobs/{id})
   const res = await apiCall(`/developer/v2alpha/jobs/${jobId}`);
 
   if (!res.ok) {
@@ -235,10 +299,14 @@ export async function getGenerationStatus(
   }
 
   const data = await res.json();
+  const images: string[] = [];
+  if (data.result_url) images.push(data.result_url);
+  if (data.result_json?.images) images.push(...data.result_json.images);
+
   return {
     jobId: data.id || data.job_id || data.jobId,
     status: data.status,
-    images: data.images || data.output_urls || [],
+    images: images.length > 0 ? images : (data.images || data.output_urls || []),
   };
 }
 

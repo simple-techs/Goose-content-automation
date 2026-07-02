@@ -59,11 +59,21 @@ export default function PersonaTable({ personas, onRefresh }: PersonaTableProps)
 
     setLoading("generating");
     try {
-      await fetch("/api/generate", {
+      const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ personaIds: activeSelected }),
       });
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        alert(data.error || "Generation failed. Check Settings for session token.");
+      } else if (data.failed > 0) {
+        const errors = data.results
+          .filter((r: { success: boolean }) => !r.success)
+          .map((r: { error?: string }) => r.error)
+          .join("\n");
+        alert(`${data.succeeded} succeeded, ${data.failed} failed:\n${errors}`);
+      }
       onRefresh();
     } finally {
       setLoading(null);
