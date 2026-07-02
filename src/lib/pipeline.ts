@@ -354,21 +354,45 @@ export async function checkAndFinalizeGeneration(): Promise<{
 
       const now = new Date();
       const batchName = `Batch - ${now.toISOString().split("T")[0]}`;
-      const subfolder = await createSubfolder(persona.drive_folder_id, batchName);
+      const batchFolder = await createSubfolder(persona.drive_folder_id, batchName);
+
+      // Create per-type subfolders inside the batch folder
+      const pillarNames: Record<string, string> = {
+        selfie: "Selfies",
+        shirtless: "Shirtless",
+        lifestyle: "Lifestyle",
+      };
+      const pillarFolders: Record<string, { id: string }> = {};
+
+      // Determine which types we have
+      const imageTypes = [...new Set(completedLogs.map((l) => l.image_type || "general"))];
+      for (const t of imageTypes) {
+        const folderName = pillarNames[t] || t;
+        pillarFolders[t] = await createSubfolder(batchFolder.id, folderName);
+      }
 
       const uploadedFiles = [];
       const typeCounts: Record<string, number> = {};
 
-      for (const log of completedLogs) {
+      // Sort logs by type order: selfie → shirtless → lifestyle
+      const typeOrder = ["selfie", "shirtless", "lifestyle"];
+      const sortedLogs = [...completedLogs].sort((a, b) => {
+        const ai = typeOrder.indexOf(a.image_type || "general");
+        const bi = typeOrder.indexOf(b.image_type || "general");
+        return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+      });
+
+      for (const log of sortedLogs) {
         const urls = (log.output_url || "").split(",").filter(Boolean);
         const imageType = log.image_type || "general";
+        const targetFolder = pillarFolders[imageType] || batchFolder;
 
         for (const url of urls) {
           typeCounts[imageType] = (typeCounts[imageType] || 0) + 1;
           const typeIndex = typeCounts[imageType];
           const imgBuffer = await downloadGeneratedImage(url);
-          const fileName = `${persona.name}_${imageType}_${typeIndex}_${now.toISOString().split("T")[0]}.png`;
-          const uploaded = await uploadImageToFolder(subfolder.id, fileName, imgBuffer);
+          const fileName = `${persona.name}_${imageType}_${typeIndex}.png`;
+          const uploaded = await uploadImageToFolder(targetFolder.id, fileName, imgBuffer);
           uploadedFiles.push(uploaded);
         }
       }
@@ -376,8 +400,8 @@ export async function checkAndFinalizeGeneration(): Promise<{
       await db
         .from("batches")
         .update({
-          drive_subfolder_id: subfolder.id,
-          drive_subfolder_url: subfolder.webViewLink,
+          drive_subfolder_id: batchFolder.id,
+          drive_subfolder_url: batchFolder.webViewLink,
           image_count: uploadedFiles.length,
           status: "completed",
         })
@@ -389,7 +413,7 @@ export async function checkAndFinalizeGeneration(): Promise<{
           await sendSlackNotification(
             settings.slack_webhook_url,
             persona.name,
-            subfolder.webViewLink,
+            batchFolder.webViewLink,
             uploadedFiles.length,
             settings.slack_channel || undefined
           );
