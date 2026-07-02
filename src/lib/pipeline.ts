@@ -36,23 +36,55 @@ const APPROVAL_PROMPTS = [
   "Waist up shot of the person at a slight angle (3/4 turn). Wearing a grey t-shirt. Standing in front of a plain white wall background. Natural lighting, high quality portrait photography. Relaxed natural pose.",
 ];
 
-async function waitForSoulTraining(
-  soulId: string,
-  maxAttempts: number = 120,
-  intervalMs: number = 5000
-): Promise<void> {
-  for (let i = 0; i < maxAttempts; i++) {
-    const result = await getSoulIdStatus(soulId);
-    if (result.status === "ready" || result.status === "completed" || result.status === "active") {
-      return;
+export async function checkSoulTrainingStatus(soulId: string): Promise<string> {
+  const result = await getSoulIdStatus(soulId);
+  return result.status;
+}
+
+export async function generateApprovalPreviews(personaId: string, soulId: string): Promise<void> {
+  const db = getSupabaseAdmin();
+  const settings = await getSettings();
+
+  // Generate 3 approval preview images with specific compositions
+  const previewUrls: string[] = [];
+  const prompts = settings.approval_prompt
+    ? [
+        `${settings.approval_prompt} Composition: 2x2 collage grid showing 4 different angles (front half body, front shoulders up, left side shoulders up, right side shoulders up).`,
+        `${settings.approval_prompt} Composition: Full body shot, head to toe, standing straight facing camera.`,
+        `${settings.approval_prompt} Composition: Waist up at a 3/4 angle, relaxed natural pose.`,
+      ]
+    : APPROVAL_PROMPTS;
+
+  for (const prompt of prompts) {
+    try {
+      const genResult = await generateImages(soulId, prompt, 1);
+      if (genResult.images && genResult.images.length > 0) {
+        previewUrls.push(...genResult.images);
+      } else {
+        const urls = await pollForCompletion(genResult.jobId);
+        previewUrls.push(...urls);
+      }
+    } catch (genErr) {
+      console.error("Preview generation failed for prompt:", prompt, genErr);
     }
-    if (result.status === "failed" || result.status === "error") {
-      throw new Error(`Soul ID training failed with status: ${result.status}`);
-    }
-    // Still training — wait and retry
-    await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
-  throw new Error(`Soul ID training timed out after ${maxAttempts * intervalMs / 1000}s`);
+
+  if (previewUrls.length > 0) {
+    const rows = previewUrls.map((url) => ({
+      persona_id: personaId,
+      image_url: url,
+    }));
+    await db.from("approval_images").insert(rows);
+  }
+
+  await db
+    .from("personas")
+    .update({
+      status: previewUrls.length > 0 ? "pending_approval" : "active",
+      error_message: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", personaId);
 }
 
 export async function onboardPersona(personaId: string): Promise<void> {
@@ -91,49 +123,13 @@ export async function onboardPersona(personaId: string): Promise<void> {
 
     const result = await createSoulId(persona.name, buffers, names);
 
-    // Wait for soul training to complete before generating previews
-    await waitForSoulTraining(result.soulId);
-
-    // Get the approval prompt from settings (or use defaults)
-    const settings = await getSettings();
-
-    // Generate 3 approval preview images with specific compositions
-    const previewUrls: string[] = [];
-    const prompts = settings.approval_prompt
-      ? [
-          `${settings.approval_prompt} Composition: 2x2 collage grid showing 4 different angles (front half body, front shoulders up, left side shoulders up, right side shoulders up).`,
-          `${settings.approval_prompt} Composition: Full body shot, head to toe, standing straight facing camera.`,
-          `${settings.approval_prompt} Composition: Waist up at a 3/4 angle, relaxed natural pose.`,
-        ]
-      : APPROVAL_PROMPTS;
-
-    for (const prompt of prompts) {
-      try {
-        const genResult = await generateImages(result.soulId, prompt, 1);
-        if (genResult.images && genResult.images.length > 0) {
-          previewUrls.push(...genResult.images);
-        } else {
-          const urls = await pollForCompletion(genResult.jobId);
-          previewUrls.push(...urls);
-        }
-      } catch (genErr) {
-        console.error("Preview generation failed for prompt:", prompt, genErr);
-      }
-    }
-
-    if (previewUrls.length > 0) {
-      const rows = previewUrls.map((url) => ({
-        persona_id: personaId,
-        image_url: url,
-      }));
-      await db.from("approval_images").insert(rows);
-    }
-
+    // Save soul ID immediately — training happens async on Higgsfield's side
+    // The /api/check-training endpoint will poll and generate previews when ready
     await db
       .from("personas")
       .update({
         higgsfield_soul_id: result.soulId,
-        status: previewUrls.length > 0 ? "pending_approval" : "active",
+        status: "onboarding",
         image_count: images.length,
         error_message: null,
         updated_at: new Date().toISOString(),

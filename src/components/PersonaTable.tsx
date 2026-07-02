@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import StatusBadge from "./StatusBadge";
 import ApprovalModal from "./ApprovalModal";
 import type { Persona } from "@/lib/types";
@@ -14,6 +14,37 @@ export default function PersonaTable({ personas, onRefresh }: PersonaTableProps)
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState<string | null>(null);
   const [reviewPersona, setReviewPersona] = useState<Persona | null>(null);
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Auto-poll training status when personas are in "onboarding" state
+  const hasOnboarding = personas.some((p) => p.status === "onboarding" && p.higgsfield_soul_id);
+
+  useEffect(() => {
+    if (hasOnboarding) {
+      // Poll every 15 seconds to check if soul training completed
+      pollingRef.current = setInterval(async () => {
+        try {
+          const res = await fetch("/api/check-training", { method: "POST" });
+          const data = await res.json();
+          const hasUpdate = data.results?.some(
+            (r: { action: string }) => r.action === "generated_previews" || r.action === "marked_error"
+          );
+          if (hasUpdate) {
+            onRefresh();
+          }
+        } catch {
+          // Silently ignore polling errors
+        }
+      }, 15000);
+    }
+
+    return () => {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+        pollingRef.current = null;
+      }
+    };
+  }, [hasOnboarding, onRefresh]);
 
   const toggleSelect = (id: string) => {
     setSelected((prev) => {
