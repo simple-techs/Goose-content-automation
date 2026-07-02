@@ -66,7 +66,7 @@ export default function PersonaTable({ personas, onRefresh }: PersonaTableProps)
       });
       const data = await res.json();
       if (!res.ok || data.error) {
-        alert(data.error || "Generation failed. Check Settings for session token.");
+        alert(data.error || "Generation failed. Make sure the token bridge is active in Settings.");
       } else if (data.failed > 0) {
         const errors = data.results
           .filter((r: { success: boolean }) => !r.success)

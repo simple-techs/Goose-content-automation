@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import type { AppSettings } from "@/lib/types";
 
 export default function SettingsPanel() {
@@ -8,6 +8,19 @@ export default function SettingsPanel() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
+  const [bridgeStatus, setBridgeStatus] = useState<{
+    fresh: boolean;
+    ageSeconds: number | null;
+    hasToken: boolean;
+  } | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const checkBridgeStatus = useCallback(() => {
+    fetch("/api/settings/higgsfield-token")
+      .then((r) => r.json())
+      .then((d) => setBridgeStatus(d))
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     fetch("/api/settings")
@@ -21,7 +34,11 @@ export default function SettingsPanel() {
       })
       .catch(() => setMessage("Failed to load settings"))
       .finally(() => setLoading(false));
-  }, []);
+
+    checkBridgeStatus();
+    const interval = setInterval(checkBridgeStatus, 10000);
+    return () => clearInterval(interval);
+  }, [checkBridgeStatus]);
 
   const handleSave = async () => {
     if (!settings) return;
@@ -126,66 +143,52 @@ export default function SettingsPanel() {
               <span className="text-sm text-gray-600">{settings.higgsfield_email}</span>
             )}
           </div>
-          <div>
-            <label className="block text-xs font-medium text-gray-600">
-              Session Token for Generation
-              <span className="ml-1 text-gray-400">(required before clicking Generate Content)</span>
-            </label>
-            <div className="mt-1 flex gap-2">
-              <input
-                type="password"
-                placeholder="Paste session token from higgsfield.ai"
-                className="block flex-1 rounded-md border border-gray-300 px-3 py-1.5 text-xs shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    const input = e.currentTarget;
-                    const token = input.value.trim();
-                    if (!token) return;
-                    fetch("/api/settings/higgsfield-token", {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ token }),
-                    })
-                      .then((r) => r.json())
-                      .then((d) => {
-                        if (d.ok) {
-                          input.value = "";
-                          setMessage("Token saved — go generate content now");
-                        } else {
-                          setMessage(d.error || "Failed to save token");
-                        }
-                      });
-                  }
-                }}
-              />
-              <button
-                onClick={(e) => {
-                  const input = (e.currentTarget.previousElementSibling as HTMLInputElement);
-                  const token = input?.value?.trim();
-                  if (!token) return;
-                  fetch("/api/settings/higgsfield-token", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ token }),
-                  })
-                    .then((r) => r.json())
-                    .then((d) => {
-                      if (d.ok) {
-                        input.value = "";
-                        setMessage("Token saved — go generate content now");
-                      } else {
-                        setMessage(d.error || "Failed to save token");
-                      }
-                    });
-                }}
-                className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700"
-              >
-                Save
-              </button>
+
+          <div className="rounded-md border border-gray-200 bg-gray-50 p-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-gray-700">Token Bridge for Generation</span>
+              {bridgeStatus && (
+                <span
+                  className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium ${
+                    bridgeStatus.fresh
+                      ? "bg-green-100 text-green-700"
+                      : "bg-yellow-100 text-yellow-700"
+                  }`}
+                >
+                  <span
+                    className={`h-1.5 w-1.5 rounded-full ${
+                      bridgeStatus.fresh ? "bg-green-500" : "bg-yellow-500"
+                    }`}
+                  />
+                  {bridgeStatus.fresh
+                    ? "Active"
+                    : bridgeStatus.hasToken
+                      ? "Expired"
+                      : "Not connected"}
+                </span>
+              )}
             </div>
-            <p className="mt-1 text-xs text-gray-400">
-              On higgsfield.ai console: <code className="bg-gray-100 px-1 rounded">document.cookie.match(/__session=([^;]+)/)?.[1]</code>
+            <p className="mt-1 text-xs text-gray-500">
+              To enable image generation, keep <a href="https://higgsfield.ai" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">higgsfield.ai</a> open and run the bridge command in its console (F12 &rarr; Console).
             </p>
+            <div className="mt-2">
+              <button
+                onClick={() => {
+                  const appUrl = window.location.origin;
+                  const cmd = `(function(){var u='${appUrl}/api/settings/higgsfield-token';function s(){var t=document.cookie.match(/__session=([^;]+)/);if(!t)return console.warn('[Bridge] No session cookie');fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:t[1]}),mode:'cors'}).then(function(r){return r.json()}).then(function(d){console.log('[Bridge]',d.ok?'Token sent':'Error:',d.ok?'':d.error)}).catch(function(e){console.error('[Bridge]',e)})}s();setInterval(s,30000);console.log('[Bridge] Active - tokens auto-refresh every 30s')})()`;
+                  navigator.clipboard.writeText(cmd).then(() => {
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 3000);
+                  });
+                }}
+                className="rounded-md bg-gray-800 px-3 py-1.5 text-xs font-medium text-white hover:bg-gray-900"
+              >
+                {copied ? "Copied!" : "Copy Bridge Command"}
+              </button>
+              <span className="ml-2 text-xs text-gray-400">
+                Paste into higgsfield.ai console
+              </span>
+            </div>
           </div>
         </div>
       </div>

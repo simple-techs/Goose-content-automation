@@ -16,6 +16,7 @@ export interface GenerationResult {
 interface HiggsFieldAuth {
   api_key: string;
   session_token: string | null;
+  session_token_age_seconds: number | null;
   user_id: string;
   workspace_id: string;
 }
@@ -30,7 +31,7 @@ async function getAuth(): Promise<HiggsFieldAuth> {
 
   const { data } = await getSupabaseAdmin()
     .from("app_settings")
-    .select("higgsfield_user_id, higgsfield_workspace_id, higgsfield_access_token")
+    .select("higgsfield_user_id, higgsfield_workspace_id, higgsfield_access_token, higgsfield_token_updated_at")
     .limit(1)
     .single();
 
@@ -40,9 +41,14 @@ async function getAuth(): Promise<HiggsFieldAuth> {
     );
   }
 
+  const tokenAge = data.higgsfield_token_updated_at
+    ? Math.floor((Date.now() - new Date(data.higgsfield_token_updated_at).getTime()) / 1000)
+    : null;
+
   return {
     api_key: apiKey,
     session_token: data.higgsfield_access_token || null,
+    session_token_age_seconds: tokenAge,
     user_id: data.higgsfield_user_id,
     workspace_id: data.higgsfield_workspace_id,
   };
@@ -200,13 +206,19 @@ export async function generateImages(
   count: number = 4
 ): Promise<GenerationResult> {
   const auth = await getAuth();
+
   if (!auth.session_token) {
     throw new Error(
-      "Higgsfield session token required for generation. Go to Settings and paste a fresh token from higgsfield.ai."
+      "Token bridge not active. Open higgsfield.ai and run the bridge command from Settings."
     );
   }
 
-  // Generation requires JWT via MCP (API key doesn't work for generation)
+  if (auth.session_token_age_seconds !== null && auth.session_token_age_seconds > 55) {
+    throw new Error(
+      "Token expired. Make sure higgsfield.ai is open and the token bridge is running."
+    );
+  }
+
   const mcpRes = await fetch("https://mcp.higgsfield.ai/mcp", {
     method: "POST",
     headers: {
@@ -239,7 +251,7 @@ export async function generateImages(
   const text = await mcpRes.text();
   const dataLine = text.split("\n").find((l: string) => l.startsWith("data: "));
   if (!dataLine) {
-    throw new Error(`MCP generate_image returned no data: ${text.slice(0, 500)}`);
+    throw new Error(`MCP returned no data: ${text.slice(0, 500)}`);
   }
 
   const parsed = JSON.parse(dataLine.slice(6));
@@ -248,21 +260,26 @@ export async function generateImages(
 
   if (parsed?.result?.isError) {
     const errMsg = structured?.error || content?.[0]?.text || "Unknown error";
-    throw new Error(`Higgsfield generation failed: ${errMsg}`);
+    if (errMsg.includes("Invalid or expired token")) {
+      throw new Error(
+        "Token expired during generation. Refresh higgsfield.ai tab and try again."
+      );
+    }
+    throw new Error(`Generation failed: ${errMsg}`);
   }
 
-  // Extract job results from structured content
   const results = structured?.results || [];
   if (results.length > 0) {
     const job = results[0];
     return {
       jobId: job.id,
       status: job.status || "queued",
-      images: job.status === "completed" && job.result_url ? [job.result_url] : [],
+      images: job.status === "completed" && job.results?.rawUrl
+        ? [job.results.rawUrl]
+        : [],
     };
   }
 
-  // Fallback: parse text content for job info
   const textContent = (content || [])
     .filter((c: { type: string }) => c.type === "text")
     .map((c: { text: string }) => c.text)

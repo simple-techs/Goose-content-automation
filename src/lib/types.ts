@@ -53,6 +53,7 @@ export interface AppSettings {
   higgsfield_workspace_id: string | null;
   higgsfield_email: string | null;
   higgsfield_connected_at: string | null;
+  higgsfield_token_updated_at: string | null;
   updated_at: string;
 }
 
