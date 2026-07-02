@@ -36,6 +36,7 @@ export default function SettingsPanel() {
           slack_webhook_url: settings.slack_webhook_url,
           slack_channel: settings.slack_channel,
           default_prompt: settings.default_prompt,
+          approval_prompt: settings.approval_prompt,
           generation_count: settings.generation_count,
           cron_enabled: settings.cron_enabled,
           cron_day: settings.cron_day,
@@ -179,14 +180,34 @@ export default function SettingsPanel() {
 
       <div>
         <label className="block text-sm font-medium text-gray-700">
-          Default Generation Prompt
+          Soul ID Approval Preview Prompt
         </label>
+        <p className="text-xs text-gray-500 mb-1">
+          Used when generating preview images for Soul ID approval (3 images: collage of angles, full body, waist up)
+        </p>
+        <textarea
+          value={settings.approval_prompt}
+          onChange={(e) =>
+            setSettings({ ...settings, approval_prompt: e.target.value })
+          }
+          rows={4}
+          className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+        />
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium text-gray-700">
+          Content Generation Prompt
+        </label>
+        <p className="text-xs text-gray-500 mb-1">
+          Used for all content generation after Soul ID is approved (iPhone-realistic style, identity consistency, etc.)
+        </p>
         <textarea
           value={settings.default_prompt}
           onChange={(e) =>
             setSettings({ ...settings, default_prompt: e.target.value })
           }
-          rows={3}
+          rows={6}
           className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
         />
       </div>

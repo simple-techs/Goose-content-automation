@@ -41,6 +41,7 @@ export interface AppSettings {
   slack_webhook_url: string | null;
   slack_channel: string | null;
   default_prompt: string;
+  approval_prompt: string;
   generation_count: number;
   cron_enabled: boolean;
   cron_day: string;

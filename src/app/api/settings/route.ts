@@ -25,6 +25,7 @@ export async function PUT(req: NextRequest) {
     "slack_webhook_url",
     "slack_channel",
     "default_prompt",
+    "approval_prompt",
     "generation_count",
     "cron_enabled",
     "cron_day",

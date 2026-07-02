@@ -10,6 +10,7 @@ import {
   createSoulId,
   generateImages,
   getGenerationStatus,
+  getSoulIdStatus,
   downloadGeneratedImage,
 } from "./higgsfield";
 import { sendSlackNotification } from "./slack";
@@ -23,6 +24,35 @@ async function getSettings(): Promise<AppSettings> {
     .single();
   if (error) throw new Error(`Failed to get settings: ${error.message}`);
   return data as AppSettings;
+}
+
+// Approval preview image prompts — each generates 1 image with a specific composition
+const APPROVAL_PROMPTS = [
+  // Image 1: Collage of 4 face angles
+  "A 2x2 collage grid of the same person from 4 different angles: top-left is direct front view half body, top-right is direct front view shoulders up, bottom-left is left side profile shoulders up, bottom-right is right side profile shoulders up. Person is wearing dark blue jeans and a grey t-shirt, standing in front of a plain white wall background. Natural lighting, high quality portrait photography.",
+  // Image 2: Full body
+  "Full body shot of the person standing straight, facing the camera. Wearing dark blue jeans and a grey t-shirt. Standing in front of a plain white wall background. Natural lighting, high quality portrait photography. Head to toe visible.",
+  // Image 3: Waist up at an angle
+  "Waist up shot of the person at a slight angle (3/4 turn). Wearing a grey t-shirt. Standing in front of a plain white wall background. Natural lighting, high quality portrait photography. Relaxed natural pose.",
+];
+
+async function waitForSoulTraining(
+  soulId: string,
+  maxAttempts: number = 120,
+  intervalMs: number = 5000
+): Promise<void> {
+  for (let i = 0; i < maxAttempts; i++) {
+    const result = await getSoulIdStatus(soulId);
+    if (result.status === "ready" || result.status === "completed" || result.status === "active") {
+      return;
+    }
+    if (result.status === "failed" || result.status === "error") {
+      throw new Error(`Soul ID training failed with status: ${result.status}`);
+    }
+    // Still training — wait and retry
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  throw new Error(`Soul ID training timed out after ${maxAttempts * intervalMs / 1000}s`);
 }
 
 export async function onboardPersona(personaId: string): Promise<void> {
@@ -61,17 +91,34 @@ export async function onboardPersona(personaId: string): Promise<void> {
 
     const result = await createSoulId(persona.name, buffers, names);
 
-    // Generate preview images for approval
-    let previewUrls: string[] = [];
-    try {
-      const genResult = await generateImages(result.soulId, "Professional portrait photo, high quality, natural lighting", 4);
-      if (genResult.images && genResult.images.length > 0) {
-        previewUrls = genResult.images;
-      } else {
-        previewUrls = await pollForCompletion(genResult.jobId);
+    // Wait for soul training to complete before generating previews
+    await waitForSoulTraining(result.soulId);
+
+    // Get the approval prompt from settings (or use defaults)
+    const settings = await getSettings();
+
+    // Generate 3 approval preview images with specific compositions
+    const previewUrls: string[] = [];
+    const prompts = settings.approval_prompt
+      ? [
+          `${settings.approval_prompt} Composition: 2x2 collage grid showing 4 different angles (front half body, front shoulders up, left side shoulders up, right side shoulders up).`,
+          `${settings.approval_prompt} Composition: Full body shot, head to toe, standing straight facing camera.`,
+          `${settings.approval_prompt} Composition: Waist up at a 3/4 angle, relaxed natural pose.`,
+        ]
+      : APPROVAL_PROMPTS;
+
+    for (const prompt of prompts) {
+      try {
+        const genResult = await generateImages(result.soulId, prompt, 1);
+        if (genResult.images && genResult.images.length > 0) {
+          previewUrls.push(...genResult.images);
+        } else {
+          const urls = await pollForCompletion(genResult.jobId);
+          previewUrls.push(...urls);
+        }
+      } catch (genErr) {
+        console.error("Preview generation failed for prompt:", prompt, genErr);
       }
-    } catch (genErr) {
-      console.error("Preview generation failed, proceeding without previews:", genErr);
     }
 
     if (previewUrls.length > 0) {
