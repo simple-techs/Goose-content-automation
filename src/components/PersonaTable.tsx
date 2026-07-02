@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import StatusBadge from "./StatusBadge";
+import ApprovalModal from "./ApprovalModal";
 import type { Persona } from "@/lib/types";
 
 interface PersonaTableProps {
@@ -12,6 +13,7 @@ interface PersonaTableProps {
 export default function PersonaTable({ personas, onRefresh }: PersonaTableProps) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState<string | null>(null);
+  const [reviewPersona, setReviewPersona] = useState<Persona | null>(null);
 
   const toggleSelect = (id: string) => {
     setSelected((prev) => {
@@ -66,7 +68,7 @@ export default function PersonaTable({ personas, onRefresh }: PersonaTableProps)
       });
       const data = await res.json();
       if (!res.ok || data.error) {
-        alert(data.error || "Generation failed. Make sure the token bridge is active in Settings.");
+        alert(data.error || "Generation failed. Check Settings.");
       } else if (data.failed > 0) {
         const errors = data.results
           .filter((r: { success: boolean }) => !r.success)
@@ -86,10 +88,13 @@ export default function PersonaTable({ personas, onRefresh }: PersonaTableProps)
   const activeCount = personas.filter(
     (p) => selected.has(p.id) && p.status === "active"
   ).length;
+  const pendingApprovalCount = personas.filter(
+    (p) => p.status === "pending_approval"
+  ).length;
 
   return (
     <div>
-      <div className="mb-4 flex items-center gap-3">
+      <div className="mb-4 flex flex-wrap items-center gap-3">
         <button
           onClick={handleOnboard}
           disabled={onboardableCount === 0 || loading !== null}
@@ -111,6 +116,11 @@ export default function PersonaTable({ personas, onRefresh }: PersonaTableProps)
         {selected.size > 0 && (
           <span className="text-sm text-gray-500">
             {selected.size} selected
+          </span>
+        )}
+        {pendingApprovalCount > 0 && (
+          <span className="ml-auto text-sm font-medium text-purple-600">
+            {pendingApprovalCount} awaiting approval
           </span>
         )}
       </div>
@@ -140,7 +150,7 @@ export default function PersonaTable({ personas, onRefresh }: PersonaTableProps)
                 Soul ID
               </th>
               <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                Drive
+                Actions
               </th>
             </tr>
           </thead>
@@ -182,16 +192,26 @@ export default function PersonaTable({ personas, onRefresh }: PersonaTableProps)
                   )}
                 </td>
                 <td className="px-4 py-3">
-                  {persona.drive_folder_url && (
-                    <a
-                      href={persona.drive_folder_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-sm text-blue-600 hover:underline"
-                    >
-                      Open
-                    </a>
-                  )}
+                  <div className="flex items-center gap-2">
+                    {persona.status === "pending_approval" && (
+                      <button
+                        onClick={() => setReviewPersona(persona)}
+                        className="rounded-md bg-purple-600 px-3 py-1 text-xs font-medium text-white hover:bg-purple-700"
+                      >
+                        Review
+                      </button>
+                    )}
+                    {persona.drive_folder_url && (
+                      <a
+                        href={persona.drive_folder_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-sm text-blue-600 hover:underline"
+                      >
+                        Drive
+                      </a>
+                    )}
+                  </div>
                 </td>
               </tr>
             ))}
@@ -208,6 +228,18 @@ export default function PersonaTable({ personas, onRefresh }: PersonaTableProps)
           </tbody>
         </table>
       </div>
+
+      {reviewPersona && (
+        <ApprovalModal
+          personaId={reviewPersona.id}
+          personaName={reviewPersona.name}
+          onClose={() => setReviewPersona(null)}
+          onApproved={() => {
+            setReviewPersona(null);
+            onRefresh();
+          }}
+        />
+      )}
     </div>
   );
 }

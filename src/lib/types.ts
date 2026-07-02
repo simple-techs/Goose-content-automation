@@ -4,7 +4,7 @@ export interface Persona {
   drive_folder_id: string;
   drive_folder_url: string;
   higgsfield_soul_id: string | null;
-  status: "pending" | "onboarding" | "active" | "error";
+  status: "pending" | "onboarding" | "pending_approval" | "active" | "error";
   image_count: number;
   error_message: string | null;
   created_at: string;
@@ -55,6 +55,14 @@ export interface AppSettings {
   higgsfield_connected_at: string | null;
   higgsfield_token_updated_at: string | null;
   updated_at: string;
+}
+
+export interface ApprovalImage {
+  id: string;
+  persona_id: string;
+  image_url: string;
+  approved: boolean | null;
+  created_at: string;
 }
 
 export interface DriveFolder {

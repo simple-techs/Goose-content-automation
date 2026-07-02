@@ -61,11 +61,32 @@ export async function onboardPersona(personaId: string): Promise<void> {
 
     const result = await createSoulId(persona.name, buffers, names);
 
+    // Generate preview images for approval
+    let previewUrls: string[] = [];
+    try {
+      const genResult = await generateImages(result.soulId, "Professional portrait photo, high quality, natural lighting", 4);
+      if (genResult.images && genResult.images.length > 0) {
+        previewUrls = genResult.images;
+      } else {
+        previewUrls = await pollForCompletion(genResult.jobId);
+      }
+    } catch (genErr) {
+      console.error("Preview generation failed, proceeding without previews:", genErr);
+    }
+
+    if (previewUrls.length > 0) {
+      const rows = previewUrls.map((url) => ({
+        persona_id: personaId,
+        image_url: url,
+      }));
+      await db.from("approval_images").insert(rows);
+    }
+
     await db
       .from("personas")
       .update({
         higgsfield_soul_id: result.soulId,
-        status: "active",
+        status: previewUrls.length > 0 ? "pending_approval" : "active",
         image_count: images.length,
         error_message: null,
         updated_at: new Date().toISOString(),
