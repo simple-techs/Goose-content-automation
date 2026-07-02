@@ -14,17 +14,22 @@ export interface GenerationResult {
 }
 
 interface HiggsFieldAuth {
-  access_token: string;
+  api_key: string;
   user_id: string;
   workspace_id: string;
 }
 
 async function getAuth(): Promise<HiggsFieldAuth> {
+  const apiKey = process.env.HIGGSFIELD_API_KEY;
+  if (!apiKey) {
+    throw new Error(
+      "HIGGSFIELD_API_KEY environment variable not set."
+    );
+  }
+
   const { data } = await getSupabaseAdmin()
     .from("app_settings")
-    .select(
-      "higgsfield_access_token, higgsfield_user_id, higgsfield_workspace_id"
-    )
+    .select("higgsfield_user_id, higgsfield_workspace_id")
     .limit(1)
     .single();
 
@@ -34,14 +39,8 @@ async function getAuth(): Promise<HiggsFieldAuth> {
     );
   }
 
-  if (!data.higgsfield_access_token) {
-    throw new Error(
-      "Higgsfield session token missing. Go to Settings and paste a fresh session token."
-    );
-  }
-
   return {
-    access_token: data.higgsfield_access_token,
+    api_key: apiKey,
     user_id: data.higgsfield_user_id,
     workspace_id: data.higgsfield_workspace_id,
   };
@@ -49,7 +48,7 @@ async function getAuth(): Promise<HiggsFieldAuth> {
 
 function buildHeaders(auth: HiggsFieldAuth): Record<string, string> {
   return {
-    Authorization: `Bearer ${auth.access_token}`,
+    Authorization: `Bearer ${auth.api_key}`,
     "X-Fnf-Surface": "mcp",
     "X-Fnf-User-Id": auth.user_id,
     "X-Fnf-Workspace-Id": auth.workspace_id,
@@ -74,7 +73,7 @@ async function apiCall(
 
   if (res.status === 401) {
     throw new Error(
-      "Higgsfield session token expired. Go to Settings and paste a fresh token."
+      "Higgsfield API key invalid. Check HIGGSFIELD_API_KEY environment variable."
     );
   }
 
@@ -85,6 +84,7 @@ async function uploadImage(
   imageBuffer: Buffer,
   imageName: string
 ): Promise<string> {
+  // Step 1: Upload image to get media ID + presigned upload URL
   const formData = new FormData();
   const uint8 = new Uint8Array(imageBuffer);
   const blob = new Blob([uint8], { type: "image/jpeg" });
@@ -101,13 +101,42 @@ async function uploadImage(
   }
 
   const data = await res.json();
-  const mediaInputId = data.media_input_id || data.id || data.media_id;
-  if (!mediaInputId) {
+  const mediaId = data.id;
+  const uploadUrl = data.upload_url;
+
+  if (!mediaId) {
     throw new Error(
-      `Image upload returned unexpected response: ${JSON.stringify(data)}`
+      `Image upload returned no media ID: ${JSON.stringify(data)}`
     );
   }
-  return mediaInputId;
+
+  // Step 2: PUT the actual image bytes to the presigned S3 URL
+  if (uploadUrl) {
+    const putRes = await fetch(uploadUrl, {
+      method: "PUT",
+      headers: { "Content-Type": "image/jpeg" },
+      body: uint8,
+    });
+
+    if (!putRes.ok) {
+      throw new Error(
+        `Failed to PUT image to S3 (${putRes.status}): ${await putRes.text()}`
+      );
+    }
+  }
+
+  // Step 3: Confirm the upload
+  const confirmRes = await apiCall(
+    `/developer/v2alpha/media/${mediaId}/confirm?type=image`,
+    { method: "POST" }
+  );
+
+  if (!confirmRes.ok) {
+    const errText = await confirmRes.text();
+    throw new Error(`Media confirm failed (${confirmRes.status}): ${errText}`);
+  }
+
+  return mediaId;
 }
 
 export async function createSoulId(
@@ -115,12 +144,14 @@ export async function createSoulId(
   imageBuffers: Buffer[],
   imageNames: string[]
 ): Promise<SoulIdResult> {
+  // Upload and confirm all images
   const mediaIds: string[] = [];
   for (let i = 0; i < imageBuffers.length; i++) {
     const mediaId = await uploadImage(imageBuffers[i], imageNames[i]);
     mediaIds.push(mediaId);
   }
 
+  // Step 4: Create the soul with confirmed media IDs
   const res = await apiCall("/developer/v2alpha/souls", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
