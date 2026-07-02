@@ -185,11 +185,6 @@ const CONTENT_BATCH_SPECS = [
     count: 4,
     prefix: "PHOTO TYPE: Lifestyle photo in a natural everyday setting (coffee shop, park, city street, gym, apartment, rooftop, beach, restaurant, etc.). Full body or 3/4 body visible. The subject is in a candid moment — walking, sitting, leaning against a wall, or interacting naturally with the environment. Wearing casual everyday clothes. Each image should be a DIFFERENT setting/location.",
   },
-  {
-    type: "lifestyle",
-    count: 1,
-    prefix: "PHOTO TYPE: Lifestyle photo in a unique everyday setting different from typical locations. Could be a bookstore, record shop, farmers market, hiking trail, basketball court, or similar. Full body or 3/4 body visible. Candid natural moment. Wearing casual everyday clothes.",
-  },
 ];
 
 export async function generateContentForPersona(
@@ -228,16 +223,34 @@ export async function generateContentForPersona(
   }
 
   try {
-    // Submit all generation jobs immediately (no polling — that happens async)
-    for (const spec of CONTENT_BATCH_SPECS) {
-      // Type-specific prompt FIRST, then base quality parameters
+    // Submit generation jobs sequentially with retry on rate limit
+    for (let si = 0; si < CONTENT_BATCH_SPECS.length; si++) {
+      const spec = CONTENT_BATCH_SPECS[si];
       const fullPrompt = `${spec.prefix}\n\nQUALITY PARAMETERS:\n${basePrompt}`;
 
-      const genResult = await generateImages(
-        persona.higgsfield_soul_id,
-        fullPrompt,
-        spec.count
-      );
+      let genResult;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          genResult = await generateImages(
+            persona.higgsfield_soul_id,
+            fullPrompt,
+            spec.count
+          );
+          break;
+        } catch (retryErr) {
+          const msg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+          if (msg.includes("Rate limit") || msg.includes("rate limit") || msg.includes("concurrent")) {
+            // Wait before retrying (15s, 30s, 45s)
+            await new Promise((r) => setTimeout(r, (attempt + 1) * 15000));
+          } else {
+            throw retryErr;
+          }
+        }
+      }
+
+      if (!genResult) {
+        throw new Error(`Rate limit exceeded after 3 retries for ${spec.type} images`);
+      }
 
       await db.from("generation_logs").insert({
         batch_id: batch.id,
@@ -247,6 +260,11 @@ export async function generateContentForPersona(
         image_type: spec.type,
         status: "processing",
       });
+
+      // Small delay between submissions to avoid hitting rate limit
+      if (si < CONTENT_BATCH_SPECS.length - 1) {
+        await new Promise((r) => setTimeout(r, 2000));
+      }
     }
 
     return { batchId: batch.id };
