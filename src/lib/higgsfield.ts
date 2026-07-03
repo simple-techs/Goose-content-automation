@@ -280,7 +280,7 @@ export async function generateWithReference(
             count: 1,
             soul_id: soulId,
             aspect_ratio: "3:4",
-            image: { id: mediaId, type: "media_input" },
+            medias: [{ value: mediaId, role: "image" }],
           },
         },
       },
