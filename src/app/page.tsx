@@ -1,64 +1,184 @@
-import Image from "next/image";
+"use client";
 
-export default function Home() {
+import { useState, useEffect, useCallback } from "react";
+import PersonaTable from "@/components/PersonaTable";
+import StatsBar from "@/components/StatsBar";
+import SettingsPanel from "@/components/SettingsPanel";
+import type { Persona } from "@/lib/types";
+
+type Tab = "personas" | "settings";
+
+export default function Dashboard() {
+  const [personas, setPersonas] = useState<Persona[]>([]);
+  const [tab, setTab] = useState<Tab>("personas");
+  const [syncing, setSyncing] = useState(false);
+  const [syncMessage, setSyncMessage] = useState("");
+  const [generatingAll, setGeneratingAll] = useState(false);
+  const [onboardingAll, setOnboardingAll] = useState(false);
+
+  const fetchPersonas = useCallback(async () => {
+    try {
+      const res = await fetch("/api/personas");
+      const data = await res.json();
+      setPersonas(data.personas || []);
+    } catch {
+      console.error("Failed to fetch personas");
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/personas")
+      .then((r) => r.json())
+      .then((d) => {
+        if (!cancelled) setPersonas(d.personas || []);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleSync = async () => {
+    setSyncing(true);
+    setSyncMessage("");
+    try {
+      const res = await fetch("/api/personas", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setSyncMessage(data.message);
+        fetchPersonas();
+      } else {
+        setSyncMessage(data.error || "Sync failed");
+      }
+    } catch {
+      setSyncMessage("Sync failed — check your settings");
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const handleOnboardAll = async () => {
+    setOnboardingAll(true);
+    try {
+      await fetch("/api/onboard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ all: true }),
+      });
+      fetchPersonas();
+    } finally {
+      setOnboardingAll(false);
+    }
+  };
+
+  const handleGenerateAll = async () => {
+    setGeneratingAll(true);
+    try {
+      await fetch("/api/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ all: true }),
+      });
+      fetchPersonas();
+    } finally {
+      setGeneratingAll(false);
+    }
+  };
+
+  const pendingCount = personas.filter((p) => p.status === "pending" || p.status === "error").length;
+  const activeCount = personas.filter((p) => p.status === "active").length;
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
+    <div className="min-h-screen bg-gray-50">
+      <header className="border-b border-gray-200 bg-white">
+        <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
+          <div>
+            <h1 className="text-xl font-bold text-gray-900">
+              Goose Content Automation
+            </h1>
+            <p className="text-sm text-gray-500">
+              AI persona content generation pipeline
+            </p>
+          </div>
+          <nav className="flex gap-1">
+            <button
+              onClick={() => setTab("personas")}
+              className={`rounded-lg px-4 py-2 text-sm font-medium ${
+                tab === "personas"
+                  ? "bg-gray-900 text-white"
+                  : "text-gray-600 hover:bg-gray-100"
+              }`}
             >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
+              Personas
+            </button>
+            <button
+              onClick={() => setTab("settings")}
+              className={`rounded-lg px-4 py-2 text-sm font-medium ${
+                tab === "settings"
+                  ? "bg-gray-900 text-white"
+                  : "text-gray-600 hover:bg-gray-100"
+              }`}
             >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+              Settings
+            </button>
+          </nav>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
+      </header>
+
+      <main className="mx-auto max-w-7xl px-6 py-8">
+        {tab === "personas" && (
+          <div className="space-y-6">
+            <StatsBar personas={personas} />
+
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                onClick={handleSync}
+                disabled={syncing}
+                className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 disabled:opacity-50"
+              >
+                {syncing ? "Syncing..." : "Sync from Drive"}
+              </button>
+              <button
+                onClick={handleOnboardAll}
+                disabled={onboardingAll || pendingCount === 0}
+                className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {onboardingAll
+                  ? "Onboarding..."
+                  : `Onboard All (${pendingCount})`}
+              </button>
+              <button
+                onClick={handleGenerateAll}
+                disabled={generatingAll || activeCount === 0}
+                className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {generatingAll
+                  ? "Generating..."
+                  : `Generate All Active (${activeCount})`}
+              </button>
+              {syncMessage && (
+                <span
+                  className={`text-sm ${
+                    syncMessage.includes("failed") || syncMessage.includes("error")
+                      ? "text-red-600"
+                      : "text-green-600"
+                  }`}
+                >
+                  {syncMessage}
+                </span>
+              )}
+            </div>
+
+            <PersonaTable personas={personas} onRefresh={fetchPersonas} />
+          </div>
+        )}
+
+        {tab === "settings" && <SettingsPanel />}
       </main>
     </div>
   );
