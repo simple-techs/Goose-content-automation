@@ -214,17 +214,15 @@ export default function SettingsPanel() {
 
       <div>
         <label className="block text-sm font-medium text-gray-700">
-          Batch Structure
+          Generation Mode
         </label>
         <div className="mt-1 rounded-md border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
-          <p className="font-medium">9 images per batch:</p>
-          <ul className="mt-1 list-disc pl-5 text-xs text-gray-600 space-y-0.5">
-            <li>3 selfies (taken in a row, slightly different expressions/angles)</li>
-            <li>2 shirtless photos (natural physique, casual setting)</li>
-            <li>4 lifestyle photos (everyday settings, candid moments)</li>
-          </ul>
-          <p className="mt-2 text-xs text-gray-500">
-            Each type uses the Content Generation Prompt above as the base, with type-specific instructions appended automatically.
+          <p className="font-medium">Reference Image Mode</p>
+          <p className="mt-1 text-xs text-gray-600">
+            Each generation picks 1 unused image from the &quot;general reference&quot; folder in Drive,
+            sends it to Higgsfield with the persona&apos;s Soul ID, and outputs a new image recreating
+            the scene with the persona&apos;s identity. Reference images are not reused unless a
+            generation is rejected.
           </p>
         </div>
       </div>

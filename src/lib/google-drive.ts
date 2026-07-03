@@ -179,6 +179,32 @@ export async function listAllImagesRecursive(folderId: string): Promise<DriveFil
   return [...directImages, ...subfolderImages.flat()];
 }
 
+export async function findFolderByName(
+  parentFolderId: string,
+  folderName: string
+): Promise<DriveFolder | null> {
+  const drive = await getDrive();
+  const res = await drive.files.list({
+    q: `'${parentFolderId}' in parents and mimeType = 'application/vnd.google-apps.folder' and name = '${folderName}' and trashed = false`,
+    fields: "files(id, name, mimeType, webViewLink)",
+    pageSize: 1,
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
+  });
+
+  if (res.data.files && res.data.files.length > 0) {
+    const file = res.data.files[0];
+    return {
+      id: file.id!,
+      name: file.name!,
+      mimeType: file.mimeType!,
+      webViewLink: file.webViewLink || `https://drive.google.com/drive/folders/${file.id}`,
+    };
+  }
+
+  return null;
+}
+
 export async function setFolderPublicReadable(folderId: string): Promise<void> {
   const drive = await getDrive();
   await drive.permissions.create({

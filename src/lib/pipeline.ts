@@ -3,12 +3,13 @@ import {
   listImagesInFolder,
   listAllImagesRecursive,
   downloadFile,
-  createSubfolder,
   uploadImageToFolder,
+  findFolderByName,
 } from "./google-drive";
 import {
   createSoulId,
   generateImages,
+  generateWithReference,
   getGenerationStatus,
   getSoulIdStatus,
   downloadGeneratedImage,
@@ -167,54 +168,51 @@ async function pollForCompletion(
   throw new Error(`Generation job ${jobId} timed out after ${maxAttempts} attempts`);
 }
 
-// Content batch: 9 images total — 1 MCP call per image (MCP returns 1 image per call)
-// Type-specific prompt goes FIRST, base quality prompt follows
-const CONTENT_BATCH_IMAGES: Array<{ type: string; prefix: string }> = [
-  // 3 selfies
-  {
-    type: "selfie",
-    prefix: "PHOTO TYPE: Close-up selfie taken with front-facing iPhone camera. The subject's arm is extended or slightly visible holding the phone. Frame from chest/shoulders up. Slightly tilted head, relaxed natural expression, looking directly at camera. Casual, candid feel — like a selfie taken casually at home or outside.",
-  },
-  {
-    type: "selfie",
-    prefix: "PHOTO TYPE: Close-up selfie taken with front-facing iPhone camera. The subject's arm is extended or slightly visible holding the phone. Frame from chest/shoulders up. Slight smile, head angled slightly to the left, relaxed vibe. Should look like the next photo in a quick selfie burst — same setting, subtly different expression.",
-  },
-  {
-    type: "selfie",
-    prefix: "PHOTO TYPE: Close-up selfie taken with front-facing iPhone camera. The subject's arm is extended or slightly visible holding the phone. Frame from chest/shoulders up. Neutral or smirking expression, head angled slightly to the right. Same setting as previous selfies — should feel like a third shot in the same burst.",
-  },
-  // 2 shirtless
-  {
-    type: "shirtless",
-    prefix: "PHOTO TYPE: Shirtless photo of the subject showing natural physique. No shirt on. Indoor casual setting — bedroom or bathroom mirror. Natural iPhone lighting. Relaxed confident pose — not overly posed or flexed. Natural skin texture, pores visible. Waist up framing.",
-  },
-  {
-    type: "shirtless",
-    prefix: "PHOTO TYPE: Shirtless photo of the subject showing natural physique. No shirt on. Outdoor casual setting — balcony, poolside, or beach. Natural sunlight. Standing or leaning, confident but relaxed. Natural skin texture, pores visible. Full body or waist up framing.",
-  },
-  // 4 lifestyle
-  {
-    type: "lifestyle",
-    prefix: "PHOTO TYPE: Lifestyle photo in a coffee shop or restaurant. The subject is sitting at a table, holding a cup, or looking at their phone. Wearing casual everyday clothes. Full or 3/4 body visible. Candid, natural moment. Warm indoor lighting.",
-  },
-  {
-    type: "lifestyle",
-    prefix: "PHOTO TYPE: Lifestyle photo on a city street or urban setting. The subject is walking, standing on a sidewalk, or leaning against a wall. Wearing casual everyday clothes. Full or 3/4 body visible. Natural daylight. Candid feel.",
-  },
-  {
-    type: "lifestyle",
-    prefix: "PHOTO TYPE: Lifestyle photo at a park, beach, or outdoor nature setting. The subject is sitting on grass, walking a trail, or standing with scenery behind them. Wearing casual everyday clothes. Full or 3/4 body visible. Natural sunlight.",
-  },
-  {
-    type: "lifestyle",
-    prefix: "PHOTO TYPE: Lifestyle photo at home, gym, or casual indoor setting. The subject is on a couch, working out, cooking, or in a relaxed indoor moment. Wearing casual everyday clothes or athletic wear. Full or 3/4 body visible. Natural indoor lighting.",
-  },
-];
+// Syncs reference images from "general reference" Drive folder into the tracking table
+async function syncReferenceImages(settings: AppSettings): Promise<void> {
+  const db = getSupabaseAdmin();
+
+  let refFolderId = settings.general_reference_folder_id;
+  if (!refFolderId) {
+    const folder = await findFolderByName(settings.parent_drive_folder_id, "general reference");
+    if (!folder) {
+      throw new Error('No "general reference" folder found in Drive. Create one and add reference images.');
+    }
+    refFolderId = folder.id;
+    await db.from("app_settings").update({ general_reference_folder_id: refFolderId }).not("id", "is", null);
+  }
+
+  const driveImages = await listImagesInFolder(refFolderId);
+
+  // Insert any new images not yet tracked
+  for (const img of driveImages) {
+    await db.from("reference_image_usage").upsert(
+      { drive_file_id: img.id, drive_file_name: img.name, status: "unused" },
+      { onConflict: "drive_file_id", ignoreDuplicates: true }
+    );
+  }
+}
+
+// Pick 1 unused reference image, returns null if none available
+async function pickUnusedReferenceImage(): Promise<{
+  id: string;
+  drive_file_id: string;
+  drive_file_name: string;
+} | null> {
+  const db = getSupabaseAdmin();
+  const { data } = await db
+    .from("reference_image_usage")
+    .select("id, drive_file_id, drive_file_name")
+    .eq("status", "unused")
+    .limit(1)
+    .single();
+
+  return data || null;
+}
 
 export async function generateContentForPersona(
-  personaId: string,
-  customPrompt?: string
-): Promise<{ batchId: string }> {
+  personaId: string
+): Promise<{ generationLogId: string }> {
   const db = getSupabaseAdmin();
   const { data: persona, error } = await db
     .from("personas")
@@ -231,74 +229,91 @@ export async function generateContentForPersona(
   }
 
   const settings = await getSettings();
-  const basePrompt = customPrompt || settings.default_prompt;
 
-  const { data: batch, error: batchErr } = await db
-    .from("batches")
-    .insert({
-      persona_id: personaId,
-      status: "generating",
-    })
-    .select()
-    .single();
+  // Sync reference images from Drive (picks up new ones)
+  await syncReferenceImages(settings);
 
-  if (batchErr || !batch) {
-    throw new Error(`Failed to create batch: ${batchErr?.message}`);
+  // Pick an unused reference image
+  const refImage = await pickUnusedReferenceImage();
+  if (!refImage) {
+    throw new Error("No unused reference images available. Add more images to the 'general reference' folder in Drive.");
   }
 
+  // Mark it as used immediately to prevent double-picks
+  await db
+    .from("reference_image_usage")
+    .update({ status: "used", used_by_persona_id: personaId, used_at: new Date().toISOString() })
+    .eq("id", refImage.id);
+
+  // Download reference image from Drive
+  const refImageBuffer = await downloadFile(refImage.drive_file_id);
+
+  const prompt = `Recreate this exact scene, pose, composition, and setting but replace the person with the subject from the Soul ID. Keep the same clothing, background, lighting, angle, and framing. The subject must look natural in the scene — not pasted in.\n\nQUALITY PARAMETERS:\n${settings.default_prompt}`;
+
   try {
-    // Submit 9 individual MCP calls (1 per image) with rate limit retry
-    for (let i = 0; i < CONTENT_BATCH_IMAGES.length; i++) {
-      const img = CONTENT_BATCH_IMAGES[i];
-      const fullPrompt = `${img.prefix}\n\nQUALITY PARAMETERS:\n${basePrompt}`;
-
-      let genResult;
-      for (let attempt = 0; attempt < 3; attempt++) {
-        try {
-          genResult = await generateImages(
-            persona.higgsfield_soul_id,
-            fullPrompt,
-            1
-          );
-          break;
-        } catch (retryErr) {
-          const msg = retryErr instanceof Error ? retryErr.message : String(retryErr);
-          if (msg.includes("Rate limit") || msg.includes("rate limit") || msg.includes("concurrent")) {
-            await new Promise((r) => setTimeout(r, (attempt + 1) * 15000));
-          } else {
-            throw retryErr;
-          }
+    // Generate with reference image
+    let genResult;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        genResult = await generateWithReference(
+          persona.higgsfield_soul_id,
+          refImageBuffer,
+          refImage.drive_file_name,
+          prompt
+        );
+        break;
+      } catch (retryErr) {
+        const msg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+        if (msg.includes("Rate limit") || msg.includes("rate limit") || msg.includes("concurrent")) {
+          await new Promise((r) => setTimeout(r, (attempt + 1) * 15000));
+        } else {
+          throw retryErr;
         }
-      }
-
-      if (!genResult) {
-        throw new Error(`Rate limit exceeded after retries for ${img.type} image ${i + 1}`);
-      }
-
-      await db.from("generation_logs").insert({
-        batch_id: batch.id,
-        persona_id: personaId,
-        higgsfield_job_id: genResult.jobId,
-        prompt: fullPrompt,
-        image_type: img.type,
-        status: "processing",
-      });
-
-      // Brief delay between submissions to avoid rate limit
-      if (i < CONTENT_BATCH_IMAGES.length - 1) {
-        await new Promise((r) => setTimeout(r, 1500));
       }
     }
 
-    return { batchId: batch.id };
+    if (!genResult) {
+      throw new Error("Rate limit exceeded after retries");
+    }
+
+    const { data: log } = await db.from("generation_logs").insert({
+      persona_id: personaId,
+      higgsfield_job_id: genResult.jobId,
+      prompt,
+      image_type: "reference",
+      status: "processing",
+    }).select("id").single();
+
+    // Link generation log to reference image
+    if (log) {
+      await db
+        .from("reference_image_usage")
+        .update({ generation_log_id: log.id })
+        .eq("id", refImage.id);
+    }
+
+    return { generationLogId: log?.id || "" };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    // On failure, mark reference image as unused again so it can be retried
     await db
-      .from("batches")
-      .update({ status: "failed", error_message: message })
-      .eq("id", batch.id);
+      .from("reference_image_usage")
+      .update({ status: "unused", used_by_persona_id: null, used_at: null })
+      .eq("id", refImage.id);
     throw err;
   }
+}
+
+// Mark a generation as rejected — frees the reference image for reuse
+export async function rejectGeneration(generationLogId: string): Promise<void> {
+  const db = getSupabaseAdmin();
+
+  await db.from("generation_logs").update({ status: "failed", error_message: "Rejected by user" }).eq("id", generationLogId);
+
+  // Free the reference image for reuse
+  await db
+    .from("reference_image_usage")
+    .update({ status: "unused", used_by_persona_id: null, used_at: null, generation_log_id: null })
+    .eq("generation_log_id", generationLogId);
 }
 
 export async function checkAndFinalizeGeneration(): Promise<{
@@ -308,170 +323,67 @@ export async function checkAndFinalizeGeneration(): Promise<{
 }> {
   const db = getSupabaseAdmin();
 
-  // Find all batches in "generating" status
-  const { data: batches } = await db
-    .from("batches")
-    .select("id, persona_id")
-    .eq("status", "generating");
+  // Find all generation logs in "processing" status
+  const { data: logs } = await db
+    .from("generation_logs")
+    .select("*")
+    .eq("status", "processing");
 
-  if (!batches || batches.length === 0) {
+  if (!logs || logs.length === 0) {
     return { checked: 0, completed: 0, stillProcessing: 0 };
   }
 
   let completed = 0;
   let stillProcessing = 0;
 
-  for (const batch of batches) {
-    // Get all generation logs for this batch
-    const { data: logs } = await db
-      .from("generation_logs")
-      .select("*")
-      .eq("batch_id", batch.id);
+  for (const log of logs) {
+    if (!log.higgsfield_job_id) continue;
 
-    if (!logs || logs.length === 0) continue;
-
-    let allDone = true;
-    let anyFailed = false;
-
-    for (const log of logs) {
-      if (log.status === "completed" || log.status === "failed") continue;
-      if (!log.higgsfield_job_id) continue;
-
-      // Check job status on Higgsfield
-      try {
-        const jobResult = await getGenerationStatus(log.higgsfield_job_id);
-
-        if (jobResult.status === "completed" && jobResult.images && jobResult.images.length > 0) {
-          await db
-            .from("generation_logs")
-            .update({
-              status: "completed",
-              output_url: jobResult.images.join(","),
-            })
-            .eq("id", log.id);
-        } else if (jobResult.status === "failed") {
-          await db
-            .from("generation_logs")
-            .update({ status: "failed", error_message: "Generation job failed" })
-            .eq("id", log.id);
-          anyFailed = true;
-        } else {
-          allDone = false;
-        }
-      } catch {
-        allDone = false;
-      }
-    }
-
-    if (!allDone) {
-      stillProcessing++;
-      continue;
-    }
-
-    // All jobs done — download images and upload to Drive
     try {
-      const { data: completedLogs } = await db
-        .from("generation_logs")
-        .select("*")
-        .eq("batch_id", batch.id)
-        .eq("status", "completed");
+      const jobResult = await getGenerationStatus(log.higgsfield_job_id);
 
-      if (!completedLogs || completedLogs.length === 0) {
-        if (anyFailed) {
-          await db.from("batches").update({ status: "failed", error_message: "All generation jobs failed" }).eq("id", batch.id);
-        }
-        continue;
+      if (jobResult.status === "completed" && jobResult.images && jobResult.images.length > 0) {
+        // Job complete — download image and upload to persona's Drive folder
+        const { data: persona } = await db
+          .from("personas")
+          .select("name, drive_folder_id")
+          .eq("id", log.persona_id)
+          .single();
+
+        if (!persona) continue;
+
+        const imageUrl = jobResult.images[0];
+        const imgBuffer = await downloadGeneratedImage(imageUrl);
+        const now = new Date();
+        const fileName = `${persona.name}_gen_${now.toISOString().replace(/[:.]/g, "-")}.png`;
+        await uploadImageToFolder(persona.drive_folder_id, fileName, imgBuffer);
+
+        await db
+          .from("generation_logs")
+          .update({ status: "completed", output_url: imageUrl })
+          .eq("id", log.id);
+
+        completed++;
+      } else if (jobResult.status === "failed") {
+        await db
+          .from("generation_logs")
+          .update({ status: "failed", error_message: "Generation job failed on Higgsfield" })
+          .eq("id", log.id);
+
+        // Free the reference image for reuse on failure
+        await db
+          .from("reference_image_usage")
+          .update({ status: "unused", used_by_persona_id: null, used_at: null, generation_log_id: null })
+          .eq("generation_log_id", log.id);
+      } else {
+        stillProcessing++;
       }
-
-      await db.from("batches").update({ status: "uploading" }).eq("id", batch.id);
-
-      const { data: persona } = await db
-        .from("personas")
-        .select("name, drive_folder_id")
-        .eq("id", batch.persona_id)
-        .single();
-
-      if (!persona) continue;
-
-      const now = new Date();
-      const batchName = `Batch - ${now.toISOString().split("T")[0]}`;
-      const batchFolder = await createSubfolder(persona.drive_folder_id, batchName);
-
-      // Create per-type subfolders inside the batch folder
-      const pillarNames: Record<string, string> = {
-        selfie: "Selfies",
-        shirtless: "Shirtless",
-        lifestyle: "Lifestyle",
-      };
-      const pillarFolders: Record<string, { id: string }> = {};
-
-      // Determine which types we have
-      const imageTypes = [...new Set(completedLogs.map((l) => l.image_type || "general"))];
-      for (const t of imageTypes) {
-        const folderName = pillarNames[t] || t;
-        pillarFolders[t] = await createSubfolder(batchFolder.id, folderName);
-      }
-
-      const uploadedFiles = [];
-      const typeCounts: Record<string, number> = {};
-
-      // Sort logs by type order: selfie → shirtless → lifestyle
-      const typeOrder = ["selfie", "shirtless", "lifestyle"];
-      const sortedLogs = [...completedLogs].sort((a, b) => {
-        const ai = typeOrder.indexOf(a.image_type || "general");
-        const bi = typeOrder.indexOf(b.image_type || "general");
-        return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
-      });
-
-      for (const log of sortedLogs) {
-        const urls = (log.output_url || "").split(",").filter(Boolean);
-        const imageType = log.image_type || "general";
-        const targetFolder = pillarFolders[imageType] || batchFolder;
-
-        for (const url of urls) {
-          typeCounts[imageType] = (typeCounts[imageType] || 0) + 1;
-          const typeIndex = typeCounts[imageType];
-          const imgBuffer = await downloadGeneratedImage(url);
-          const fileName = `${persona.name}_${imageType}_${typeIndex}.png`;
-          const uploaded = await uploadImageToFolder(targetFolder.id, fileName, imgBuffer);
-          uploadedFiles.push(uploaded);
-        }
-      }
-
-      await db
-        .from("batches")
-        .update({
-          drive_subfolder_id: batchFolder.id,
-          drive_subfolder_url: batchFolder.webViewLink,
-          image_count: uploadedFiles.length,
-          status: "completed",
-        })
-        .eq("id", batch.id);
-
-      const settings = await getSettings();
-      if (settings.slack_webhook_url) {
-        try {
-          await sendSlackNotification(
-            settings.slack_webhook_url,
-            persona.name,
-            batchFolder.webViewLink,
-            uploadedFiles.length,
-            settings.slack_channel || undefined
-          );
-          await db.from("batches").update({ slack_notified: true }).eq("id", batch.id);
-        } catch {
-          console.error("Slack notification failed for batch", batch.id);
-        }
-      }
-
-      completed++;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      await db.from("batches").update({ status: "failed", error_message: message }).eq("id", batch.id);
+    } catch {
+      stillProcessing++;
     }
   }
 
-  return { checked: batches.length, completed, stillProcessing };
+  return { checked: logs.length, completed, stillProcessing };
 }
 
 export async function runWeeklyGeneration(): Promise<{

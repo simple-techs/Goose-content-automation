@@ -245,6 +245,102 @@ export async function getSoulIdStatus(
   return { status: data.status };
 }
 
+export async function generateWithReference(
+  soulId: string,
+  referenceImageBuffer: Buffer,
+  referenceImageName: string,
+  prompt: string
+): Promise<GenerationResult> {
+  // Upload reference image to Higgsfield
+  const mediaId = await uploadImage(referenceImageBuffer, referenceImageName);
+
+  const accessToken = await getMcpAccessToken();
+  const auth = await getAuth();
+
+  const mcpRes = await fetch("https://mcp.higgsfield.ai/mcp", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+      "X-Fnf-Surface": "mcp",
+      "X-Fnf-User-Id": auth.user_id,
+      "X-Fnf-Workspace-Id": auth.workspace_id,
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      method: "tools/call",
+      id: Date.now(),
+      params: {
+        name: "generate_image",
+        arguments: {
+          params: {
+            model: "soul_2",
+            prompt,
+            count: 1,
+            soul_id: soulId,
+            aspect_ratio: "3:4",
+            image: { id: mediaId, type: "media_input" },
+          },
+        },
+      },
+    }),
+  });
+
+  const text = await mcpRes.text();
+  const dataLine = text.split("\n").find((l: string) => l.startsWith("data: "));
+  if (!dataLine) {
+    throw new Error(`MCP returned no data: ${text.slice(0, 500)}`);
+  }
+
+  const parsed = JSON.parse(dataLine.slice(6));
+  const content = parsed?.result?.content;
+  const structured = parsed?.result?.structuredContent;
+
+  if (parsed?.result?.isError) {
+    const errMsg = structured?.error || content?.[0]?.text || "Unknown error";
+    if (errMsg.includes("Invalid or expired token")) {
+      throw new Error(
+        "Higgsfield auth expired. Go to Settings and reconnect Higgsfield."
+      );
+    }
+    throw new Error(`Generation failed: ${errMsg}`);
+  }
+
+  const results = structured?.results || [];
+  if (results.length > 0) {
+    const job = results[0];
+    return {
+      jobId: job.id,
+      status: job.status || "queued",
+      images: job.status === "completed" && job.results?.rawUrl
+        ? [job.results.rawUrl]
+        : [],
+    };
+  }
+
+  const textContent = (content || [])
+    .filter((c: { type: string }) => c.type === "text")
+    .map((c: { text: string }) => c.text)
+    .join("\n");
+
+  const jobIdMatch = textContent.match(
+    /(?:job_id|id)[":\s]+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i
+  );
+
+  if (jobIdMatch) {
+    return {
+      jobId: jobIdMatch[1],
+      status: "queued",
+      images: [],
+    };
+  }
+
+  throw new Error(
+    `Could not parse generation response: ${textContent.slice(0, 500)}`
+  );
+}
+
 export async function generateImages(
   soulId: string,
   prompt: string,

@@ -6,7 +6,6 @@ export async function POST(req: NextRequest) {
   const body = await req.json();
   const personaIds: string[] | undefined = body.personaIds;
   const all: boolean = body.all === true;
-  const prompt: string | undefined = body.prompt;
 
   let ids: string[] = [];
 
@@ -36,18 +35,18 @@ export async function POST(req: NextRequest) {
   const results: Array<{
     personaId: string;
     success: boolean;
-    batchId?: string;
+    generationLogId?: string;
     error?: string;
   }> = [];
 
-  // Submit generation jobs one at a time (each submits 4 MCP calls)
+  // Each persona gets 1 generation (1 reference image → 1 output image)
   for (const id of ids) {
     try {
-      const result = await generateContentForPersona(id, prompt);
+      const result = await generateContentForPersona(id);
       results.push({
         personaId: id,
         success: true,
-        batchId: result.batchId,
+        generationLogId: result.generationLogId,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
